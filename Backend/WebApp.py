@@ -110,6 +110,7 @@ from Backend.MongoStore import (
     save_message,
     session_participant,
     set_participant_role,
+    RejoinConfirmationRequired,
 )
 
 
@@ -226,6 +227,11 @@ class SessionMessageRequest(BaseModel):
 
 class InviteAcceptRequest(BaseModel):
     token: str = Field(min_length=20, max_length=256)
+    share_private_conversation: bool | None = None
+
+
+class ChatInviteRequest(BaseModel):
+    history_mode: str = Field(default="none", pattern="^(all|past_3_days|none)$")
 
 
 class ParticipantRoleRequest(BaseModel):
@@ -513,14 +519,17 @@ def chat_messages_api(session_id: str, request: Request) -> dict:
 
 
 @app.delete("/api/chats/{session_id}")
-def delete_chat_api(session_id: str, request: Request) -> dict:
+async def delete_chat_api(session_id: str, request: Request) -> dict:
     user = _authenticated_user(request)
     try:
-        if not delete_chat_session(user["id"], session_id):
+        result = delete_chat_session(user["id"], session_id)
+        if not result:
             raise HTTPException(status_code=404, detail="Chat session not found.")
+        if result.get("private_session"):
+            await live_sessions.broadcast(session_id, {"type": "refresh"})
+        return result
     except StoreUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    return {"deleted": True, "session_id": session_id}
 
 
 @app.post("/api/chats/{session_id}/messages")
@@ -558,10 +567,10 @@ def chat_participants_api(session_id: str, request: Request) -> dict:
 
 
 @app.post("/api/chats/{session_id}/invites")
-def create_chat_invite_api(session_id: str, request: Request) -> dict:
+def create_chat_invite_api(session_id: str, request: Request, payload: ChatInviteRequest | None = None) -> dict:
     user = _require_chat_admin(request, session_id)
     try:
-        return {"token": create_chat_invite(session_id, user["id"])}
+        return {"token": create_chat_invite(session_id, user["id"], (payload or ChatInviteRequest()).history_mode)}
     except StoreUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
@@ -570,9 +579,17 @@ def create_chat_invite_api(session_id: str, request: Request) -> dict:
 async def accept_chat_invite_api(payload: InviteAcceptRequest, request: Request) -> dict:
     user = _authenticated_user(request)
     try:
-        session = accept_chat_invite(user["id"], payload.token)
+        session = accept_chat_invite(user["id"], payload.token, payload.share_private_conversation)
         await live_sessions.broadcast(session["id"], {"type": "refresh"})
         return {"session": session}
+    except RejoinConfirmationRequired as exc:
+        raise HTTPException(
+            status_code=409,
+            detail={
+                "code": "rejoin_private_copy_choice_required",
+                "session_title": exc.session_title,
+            },
+        ) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except StoreUnavailable as exc:

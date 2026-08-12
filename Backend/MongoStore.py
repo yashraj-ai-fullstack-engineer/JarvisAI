@@ -29,6 +29,12 @@ class StoreUnavailable(RuntimeError):
     pass
 
 
+class RejoinConfirmationRequired(RuntimeError):
+    def __init__(self, session_title: str) -> None:
+        super().__init__("This invite rejoins a grouped session you previously left.")
+        self.session_title = session_title
+
+
 def _now() -> datetime:
     return datetime.now(timezone.utc)
 
@@ -216,6 +222,7 @@ def chat_session_public(item: dict[str, Any], user_id: str = "") -> dict[str, An
         "shared": member_count > 1,
         "member_count": member_count,
         "unread_count": unread_count,
+        "has_unread": unread_count > 0,
         "private_copy": bool(item.get("private_copy")),
     }
 
@@ -260,13 +267,64 @@ def mark_chat_session_read(session_id: str, user_id: str) -> bool:
     return bool(result.matched_count)
 
 
-def create_chat_invite(session_id: str, created_by: str) -> str:
+def _invite_history_policy(history_mode: str) -> tuple[str, datetime | None]:
+    if history_mode == "all":
+        return "all", None
+    if history_mode == "past_3_days":
+        return "past_3_days", _now() - timedelta(days=3)
+    return "none", _now()
+
+
+def create_chat_invite(session_id: str, created_by: str, history_mode: str = "none") -> str:
+    mode, history_since = _invite_history_policy(history_mode)
     token = secrets.token_urlsafe(32)
-    _db().chat_invites.insert_one({"session_id": session_id, "created_by": created_by, "token_hash": hashlib.sha256(token.encode()).hexdigest(), "expires_at": _now() + timedelta(days=7)})
+    _db().chat_invites.insert_one({
+        "session_id": session_id,
+        "created_by": created_by,
+        "token_hash": hashlib.sha256(token.encode()).hexdigest(),
+        "history_mode": mode,
+        "history_since": history_since,
+        "expires_at": _now() + timedelta(days=7),
+    })
     return token
 
 
-def accept_chat_invite(user_id: str, token: str) -> dict[str, Any]:
+def _private_copy_for_source(db, user_id: str, source_session_id: str) -> dict[str, Any] | None:
+    return db.chat_sessions.find_one(
+        {"user_id": user_id, "private_copy": True, "source_session_id": source_session_id},
+        sort=[("updated_at", DESCENDING)],
+    )
+
+
+def _merge_private_copy_messages(db, private_copy: dict[str, Any], target_session_id: str, user_id: str, share_private_conversation: bool, created_at: datetime) -> None:
+    fork_created_at = private_copy.get("created_at") or created_at
+    if isinstance(fork_created_at, datetime) and fork_created_at.tzinfo is None:
+        fork_created_at = fork_created_at.replace(tzinfo=timezone.utc)
+    copied_messages: list[dict[str, Any]] = []
+    for message in db.chat_messages.find({
+        "session_id": private_copy["id"],
+        "created_at": {"$gte": fork_created_at},
+        "role": {"$in": ["user", "assistant"]},
+    }).sort("created_at", ASCENDING):
+        copy = {key: value for key, value in message.items() if key != "_id"}
+        copy.update({
+            "id": str(uuid.uuid4()),
+            "session_id": target_session_id,
+            "created_at": created_at,
+            "visibility": "shared" if share_private_conversation else "private",
+            "visible_to_user_id": "" if share_private_conversation else user_id,
+        })
+        copied_messages.append(copy)
+    if copied_messages:
+        db.chat_messages.insert_many(copied_messages)
+        db.chat_sessions.update_one({"id": target_session_id}, {"$set": {"updated_at": created_at}})
+    db.chat_participants.update_one(
+        {"session_id": private_copy["id"], "user_id": user_id},
+        {"$set": {"status": "removed", "removed_at": created_at}},
+    )
+
+
+def accept_chat_invite(user_id: str, token: str, share_private_conversation: bool | None = None) -> dict[str, Any]:
     db = _db()
     invite = db.chat_invites.find_one({"token_hash": hashlib.sha256(token.encode()).hexdigest()})
     expires_at = invite.get("expires_at") if invite else None
@@ -282,15 +340,46 @@ def accept_chat_invite(user_id: str, token: str) -> dict[str, Any]:
     existing = db.chat_participants.find_one({"session_id": session["id"], "user_id": user_id, "status": "active"})
     if existing:
         return chat_session_public(session, user_id)
+    removed_participant = db.chat_participants.find_one({"session_id": session["id"], "user_id": user_id, "status": "removed"})
+    private_copy = _private_copy_for_source(db, user_id, session["id"]) if removed_participant else None
+    if removed_participant and share_private_conversation is None:
+        raise RejoinConfirmationRequired(str(session.get("title") or "this session"))
     joined_at = _now()
+    history_mode = str(invite.get("history_mode") or "none")
+    history_since = invite.get("history_since")
+    if isinstance(history_since, datetime) and history_since.tzinfo is None:
+        history_since = history_since.replace(tzinfo=timezone.utc)
+    if history_mode not in {"all", "past_3_days", "none"}:
+        history_mode = "none"
+    if history_mode != "all" and not isinstance(history_since, datetime):
+        history_since = joined_at
     db.chat_participants.update_one(
         {"session_id": session["id"], "user_id": user_id},
-        {"$set": {"role": "member", "status": "active", "joined_at": joined_at, "last_read_at": joined_at}, "$unset": {"removed_at": ""}},
+        {"$set": {
+            "role": "member",
+            "status": "active",
+            "joined_at": joined_at,
+            "last_read_at": joined_at,
+            "history_mode": history_mode,
+            "history_since": history_since,
+            "history_shared_until": joined_at if history_mode in {"all", "past_3_days"} else None,
+        }, "$unset": {"removed_at": ""}},
         upsert=True,
     )
+    if private_copy:
+        _merge_private_copy_messages(db, private_copy, session["id"], user_id, bool(share_private_conversation), joined_at)
     joined_user = db.users.find_one({"id": user_id}, {"email": 1}) or {}
-    save_message(session["id"], "system", f"{joined_user.get('email') or 'A user'} is added")
-    return chat_session_public(session, user_id)
+    joined_email = str(joined_user.get("email") or "")
+    save_message(
+        session["id"],
+        "system",
+        f"{joined_email or 'A user'} is added",
+        extra={"target_user_id": user_id, "target_email": joined_email, "system_action": "added"},
+    )
+    public = chat_session_public(session, user_id)
+    public["invite_history_mode"] = history_mode
+    public["rejoined"] = bool(private_copy)
+    return public
 
 
 def set_participant_role(session_id: str, user_id: str, role: str) -> bool:
@@ -301,7 +390,7 @@ def set_participant_role(session_id: str, user_id: str, role: str) -> bool:
     return bool(_db().chat_participants.update_one({"session_id": session_id, "user_id": user_id, "status": "active"}, {"$set": {"role": role}}).matched_count)
 
 
-def remove_participant_and_fork(session_id: str, user_id: str) -> dict[str, Any]:
+def remove_participant_and_fork(session_id: str, user_id: str, notice_action: str = "removed") -> dict[str, Any]:
     db = _db()
     participant = session_participant(user_id, session_id)
     if not participant:
@@ -325,35 +414,74 @@ def remove_participant_and_fork(session_id: str, user_id: str) -> dict[str, Any]
         db.chat_messages.insert_many(copies)
     db.chat_participants.update_one({"session_id": session_id, "user_id": user_id}, {"$set": {"status": "removed", "removed_at": now}})
     removed_user = db.users.find_one({"id": user_id}, {"email": 1}) or {}
-    save_message(session_id, "system", f"{removed_user.get('email') or 'A user'} is removed")
+    removed_email = str(removed_user.get("email") or "")
+    notice = "left the chat" if notice_action == "left" else "is removed"
+    action = "left" if notice_action == "left" else "removed"
+    save_message(
+        session_id,
+        "system",
+        f"{removed_email or 'A user'} {notice}",
+        extra={"target_user_id": user_id, "target_email": removed_email, "system_action": action},
+    )
+    if notice_action != "left":
+        save_message(
+            fork["id"],
+            "system",
+            "You were removed",
+            visibility="private",
+            visible_to_user_id=user_id,
+            extra={"target_user_id": user_id, "target_email": removed_email, "system_action": "removed"},
+        )
     return chat_session_public(fork, user_id)
 
 
-def delete_chat_session(user_id: str, session_id: str) -> bool:
+def delete_chat_session(user_id: str, session_id: str) -> dict[str, Any] | None:
     db = _db()
     session = db.chat_sessions.find_one({"id": session_id})
     if not session or not owns_chat_session(user_id, session_id):
-        return False
+        return None
     members = db.chat_participants.count_documents({"session_id": session_id, "status": "active"})
     if members > 1:
-        db.chat_participants.update_one({"session_id": session_id, "user_id": user_id}, {"$set": {"status": "removed", "removed_at": _now()}})
-        return True
+        return {"deleted": True, "private_session": remove_participant_and_fork(session_id, user_id, notice_action="left")}
     result = db.chat_sessions.delete_one({"id": session_id})
     if not result.deleted_count:
-        return False
+        return None
     db.chat_messages.delete_many({"session_id": session_id})
-    return True
+    return {"deleted": True, "session_id": session_id}
 
 
 def _visible_message_query(session_id: str, user_id: str = "") -> dict[str, Any]:
     db = _db()
     query: dict[str, Any] = {"session_id": session_id}
     if user_id:
-        query["$or"] = [{"visibility": {"$exists": False}}, {"visibility": "shared"}, {"visible_to_user_id": user_id}]
+        visibility_filter = {"$or": [{"visibility": {"$exists": False}}, {"visibility": "shared"}, {"visible_to_user_id": user_id}]}
+        query.update(visibility_filter)
         session = db.chat_sessions.find_one({"id": session_id}, {"private_copy": 1}) or {}
         participant = session_participant(user_id, session_id)
         if participant and not session.get("private_copy"):
-            query["created_at"] = {"$gte": participant["joined_at"]}
+            history_mode = str(participant.get("history_mode") or "none")
+            history_since = participant.get("history_since") or participant["joined_at"]
+            history_shared_until = participant.get("history_shared_until") or participant["joined_at"]
+            if isinstance(history_since, datetime) and history_since.tzinfo is None:
+                history_since = history_since.replace(tzinfo=timezone.utc)
+            if isinstance(history_shared_until, datetime) and history_shared_until.tzinfo is None:
+                history_shared_until = history_shared_until.replace(tzinfo=timezone.utc)
+            query.pop("$or", None)
+            if history_mode == "all":
+                query["$or"] = [
+                    visibility_filter,
+                    {"created_at": {"$lte": history_shared_until}},
+                ]
+            elif history_mode == "past_3_days":
+                query["$or"] = [
+                    visibility_filter,
+                    {"created_at": {"$gte": history_since, "$lte": history_shared_until}},
+                ]
+            else:
+                query["$and"] = [
+                    visibility_filter,
+                    {"$or": [{"created_at": {"$gte": participant["joined_at"]}}, {"visible_to_user_id": user_id}]},
+                ]
     return query
 
 
@@ -366,6 +494,9 @@ def _message_public(item: dict[str, Any]) -> dict[str, Any]:
         "created_at": item["created_at"].isoformat(),
         "sender_name": str(item.get("sender_name") or ""),
         "sender_user_id": str(item.get("sender_user_id") or ""),
+        "target_user_id": str(item.get("target_user_id") or ""),
+        "target_email": str(item.get("target_email") or ""),
+        "system_action": str(item.get("system_action") or ""),
         **({"reply_to": reply_to} if isinstance(reply_to, dict) else {}),
     }
 
@@ -401,11 +532,13 @@ def reply_snapshot(session_id: str, user_id: str, reply_to_id: str = "", max_cha
     }
 
 
-def save_message(session_id: str, role: str, content: str, sender_user_id: str = "", sender_name: str = "", visibility: str = "shared", visible_to_user_id: str = "", reply_to: dict[str, str] | None = None) -> dict[str, Any]:
+def save_message(session_id: str, role: str, content: str, sender_user_id: str = "", sender_name: str = "", visibility: str = "shared", visible_to_user_id: str = "", reply_to: dict[str, str] | None = None, extra: dict[str, Any] | None = None) -> dict[str, Any]:
     now = _now()
     item = {"id": str(uuid.uuid4()), "session_id": session_id, "role": role, "content": content, "sender_user_id": sender_user_id, "sender_name": sender_name, "visibility": visibility, "visible_to_user_id": visible_to_user_id, "created_at": now}
     if reply_to:
         item["reply_to"] = reply_to
+    if extra:
+        item.update(extra)
     db = _db()
     db.chat_messages.insert_one(item)
     title = " ".join(content.split())[:72] or "New chat"
