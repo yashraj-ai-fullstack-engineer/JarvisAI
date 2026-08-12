@@ -123,3 +123,15 @@ For troubleshooting, visit: https://docs.langchain.com/oss/python/langgraph/erro
 2026-08-06 03:22:28,991 INFO geoapify.destination scope=local_200km selected={'formatted': 'Yelahanka Railway Station, Bengaluru', 'latitude': 13.1007, 'longitude': 77.5963}
 2026-08-06 03:22:28,991 INFO geoapify.route.resolve origin={'latitude': 13.05, 'longitude': 77.6, 'formatted': 'Current browser location'} destination={'formatted': 'Yelahanka Railway Station, Bengaluru', 'latitude': 13.1007, 'longitude': 77.5963} mode=drive
 2026-08-06 03:22:28,992 WARNING geoapify.places scope=local_200000m error=Geoapify is not configured. Add GEOAPIFY_API_KEY to the project's .env file.; retrying_global=true
+2026-08-06 03:41:03,229 INFO geoapify.destination scope=local_200km empty_result; retrying_global=true
+2026-08-06 03:41:03,231 INFO geoapify.destination scope=global selected={'formatted': 'Yelahanka Railway Station, Bengaluru', 'latitude': 13.1007, 'longitude': 77.5963}
+2026-08-06 03:41:03,232 INFO geoapify.destination scope=local_200km selected={'formatted': 'Yelahanka Railway Station, Bengaluru', 'latitude': 13.1007, 'longitude': 77.5963}
+2026-08-06 03:41:03,232 INFO geoapify.route.resolve origin={'latitude': 13.05, 'longitude': 77.6, 'formatted': 'Current browser location'} destination={'formatted': 'Yelahanka Railway Station, Bengaluru', 'latitude': 13.1007, 'longitude': 77.5963} mode=drive
+2026-08-06 03:41:03,232 WARNING geoapify.places scope=local_200000m error=Geoapify is not configured. Add GEOAPIFY_API_KEY to the project's .env file.; retrying_global=true
+2026-08-10 02:20:32,572 INFO request.start query_chars=52 has_browser_location=True location={'latitude': 13.089410075897021, 'longitude': 77.63156030881073}
+2026-08-10 02:20:32,739 INFO tools.available=get_capabilities,research_web,search_web,read_webpage,open_website,open_application,close_application,control_volume,control_brightness,get_system_specs,get_power_and_wifi_status,answer_owner_profile,gmail_search_messages,gmail_read_message,google_drive_search_files,google_calendar_list_events,google_calendar_list_calendars,maps_search_places,maps_geocode,maps_get_directions,get_weather_and_air_quality,check_holiday_schedule,convert_currency,draft_email,send_email,create_document
+2026-08-10 02:20:35,545 INFO perception.attempt=1 valid_plan=True reason=
+2026-08-10 02:20:35,545 INFO perception.plan intent=acknowledge test message tools= max_calls=1 workflow=Acknowledge the user's test message about shared sessions and respond accordingly
+2026-08-10 02:20:35,546 INFO tools.selected=
+2026-08-10 02:20:35,973 INFO model.invoke messages=2 tools=
+2026-08-10 02:20:45,391 INFO model.response tool_calls= text_chars=129

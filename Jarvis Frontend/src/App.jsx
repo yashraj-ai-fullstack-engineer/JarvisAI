@@ -23,8 +23,15 @@ const suggestions = [
   { label: 'Send an email', icon: Command },
 ]
 
+const shareHistoryOptions = [
+  { value: 'all', label: 'Share all previous conversation' },
+  { value: 'past_3_days', label: 'Share past 3 days conversation' },
+  { value: 'none', label: 'Do not share conversation' },
+]
+
 const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '')
 const AUTH_TOKEN_KEY = 'nexa.auth.token'
+const PENDING_INVITE_KEY = 'nexa.pendingInvite.token'
 const THEME_KEY = 'nexa.theme'
 const LOCATION_CACHE_PREFIX = 'nexa.location.'
 const LOCATION_CACHE_TTL = 1000 * 60 * 30
@@ -33,6 +40,14 @@ const AGENT_PREFIX_PATTERN = /^@agent(?:\b|$)[\s,:-]*/i
 const AGENT_PARTIAL_PATTERN = /^@a(?:g(?:e(?:n(?:t?)?)?)?)?$/i
 
 const locationRequestPattern = /\b(?:near me|around me|nearby|closest|nearest|from me|where am i|my location|directions?|route|distance|how far|how long|travel time|away|local|near my|restaurants?|cafes?|coffee shops?|hotels?|attractions?|pharmacies|hospitals?|gas stations?|petrol pumps?|atms?|parking|weather|forecast|traffic|places?)\b/i
+const LOCATION_PERMISSION_REQUIRED_MESSAGE = `Location permission is required to process this query. Kindly provide access and try again.
+
+Browser steps:
+1. Click the location or lock icon beside the address bar.
+2. Set Location to Allow for Nexa.
+3. Refresh the page, then ask the location query again.
+
+If it still does not work, open browser Site settings, allow Location for this site, and make sure device location services are turned on.`
 
 function readAuthToken() {
   try {
@@ -71,6 +86,27 @@ function apiFetch(resource, options = {}) {
     ...options,
     headers: authHeaders(options.headers || {}),
   })
+}
+
+function inviteTokenFromPath(pathname = window.location.pathname) {
+  return /^\/join\/([^/]+)$/.exec(pathname)?.[1] || ''
+}
+
+function readPendingInviteToken() {
+  try {
+    return window.sessionStorage.getItem(PENDING_INVITE_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+function writePendingInviteToken(token = '') {
+  try {
+    if (token) window.sessionStorage.setItem(PENDING_INVITE_KEY, token)
+    else window.sessionStorage.removeItem(PENDING_INVITE_KEY)
+  } catch {
+    // Invite links still work when the token remains in the URL.
+  }
 }
 
 function formatMessageTime(value = new Date()) {
@@ -130,6 +166,9 @@ function messageWithDocumentReference(message, id) {
       createdAt,
       senderName: message.sender_name,
       sender_user_id: message.sender_user_id,
+      target_user_id: message.target_user_id,
+      targetEmail: message.target_email,
+      systemAction: message.system_action,
       ...(replyTo ? { replyTo } : {}),
     }
   }
@@ -146,6 +185,9 @@ function messageWithDocumentReference(message, id) {
     createdAt,
     senderName: message.sender_name,
     sender_user_id: message.sender_user_id,
+    target_user_id: message.target_user_id,
+    targetEmail: message.target_email,
+    systemAction: message.system_action,
     ...(replyTo ? { replyTo } : {}),
   }
 }
@@ -161,6 +203,9 @@ function areMessagesEquivalent(current, next) {
       && message.createdAt === candidate.createdAt
       && message.senderName === candidate.senderName
       && message.sender_user_id === candidate.sender_user_id
+      && message.target_user_id === candidate.target_user_id
+      && message.targetEmail === candidate.targetEmail
+      && message.systemAction === candidate.systemAction
       && JSON.stringify(message.replyTo || null) === JSON.stringify(candidate.replyTo || null)
   })
 }
@@ -619,12 +664,17 @@ function AuthScreen({ onSignedIn }) {
     } finally { setBusy(false) }
   }
 
+  const startGoogleSignIn = () => {
+    writePendingInviteToken(inviteTokenFromPath())
+    window.location.assign(`${API_BASE}/api/auth/google`)
+  }
+
   return <main className="auth-screen"><AmbientParticles /><section className="auth-card">
     <div className="auth-brand"><Logo /><span>NEXA</span></div>
     <p className="section-label">PRIVATE WORKSPACE</p>
     <h1>{mode === 'login' ? 'Welcome back' : 'Create your account'}</h1>
     <p>Sign in to save and revisit your chat sessions.</p>
-    <button className="google-signin" type="button" onClick={() => window.location.assign(`${API_BASE}/api/auth/google`)}>
+    <button className="google-signin" type="button" onClick={startGoogleSignIn}>
       <span><img src="/google.png" alt="Google" style = {{ width: '20px', height: '20px' }} /></span> Sign in with Google
     </button>
     <div className="auth-divider"><span>or</span></div>
@@ -674,8 +724,12 @@ function App() {
   const [membersOpen, setMembersOpen] = useState(false)
   const [memberBusy, setMemberBusy] = useState('')
   const [inviteLink, setInviteLink] = useState('')
+  const [shareHistoryMode, setShareHistoryMode] = useState('none')
   const [shareDialogOpen, setShareDialogOpen] = useState(false)
   const [inviteCopied, setInviteCopied] = useState(false)
+  const [joinedInviteSessionId, setJoinedInviteSessionId] = useState('')
+  const [pendingRejoinInvite, setPendingRejoinInvite] = useState(null)
+  const [rejoinBusy, setRejoinBusy] = useState('')
   const [replyTarget, setReplyTarget] = useState(null)
   const [composerHelpOpen, setComposerHelpOpen] = useState(false)
   const [visibleMessageDay, setVisibleMessageDay] = useState('')
@@ -698,6 +752,7 @@ function App() {
   const composerHelpRef = useRef(null)
   const pdfInputRef = useRef(null)
   const locationPromptedRef = useRef('')
+  const shareInviteRequestRef = useRef(0)
 
   const applyPendingEmail = useCallback((email) => {
     setPendingEmail(email || null)
@@ -761,23 +816,61 @@ function App() {
     setSessionRole(data.your_role || 'member')
   }, [activeSessionId])
 
-  const shareChat = useCallback(async () => {
+  const createShareInvite = useCallback(async (historyMode = 'none', options = {}) => {
     if (!activeSessionId || sessionRole !== 'admin') return
+    const requestId = shareInviteRequestRef.current + 1
+    shareInviteRequestRef.current = requestId
+    const mode = historyMode || 'none'
+    if (options.resetDialog) {
+      setShareHistoryMode(mode)
+      setInviteLink('')
+      setInviteCopied(false)
+      setShareDialogOpen(true)
+    }
     setMemberBusy('invite')
     try {
-      const response = await apiFetch(`${API_BASE}/api/chats/${activeSessionId}/invites`, { method: 'POST', credentials: 'include' })
+      const response = await apiFetch(`${API_BASE}/api/chats/${activeSessionId}/invites`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ history_mode: mode }),
+      })
       const data = await response.json()
       if (!response.ok) throw new Error(data.detail || 'Could not create an invite.')
+      if (requestId !== shareInviteRequestRef.current) return
       const link = `${window.location.origin}/join/${data.token}`
       setInviteLink(link)
+      setShareHistoryMode(mode)
       setInviteCopied(false)
       setShareDialogOpen(true)
     } catch (error) {
+      if (requestId !== shareInviteRequestRef.current) return
       setApiError(error.message || 'Could not copy the invite link.')
     } finally {
-      setMemberBusy('')
+      if (requestId === shareInviteRequestRef.current) setMemberBusy('')
     }
   }, [activeSessionId, sessionRole])
+
+  const shareChat = useCallback(() => {
+    createShareInvite('none', { resetDialog: true })
+  }, [createShareInvite])
+
+  const chooseShareHistoryMode = useCallback((mode) => {
+    const nextMode = mode || 'none'
+    setShareHistoryMode(nextMode)
+    setInviteLink('')
+    setInviteCopied(false)
+    createShareInvite(nextMode)
+  }, [createShareInvite])
+
+  const closeShareDialog = useCallback(() => {
+    shareInviteRequestRef.current += 1
+    setShareDialogOpen(false)
+    setShareHistoryMode('none')
+    setInviteLink('')
+    setInviteCopied(false)
+    setMemberBusy('')
+  }, [])
 
   const copyInviteLink = useCallback(async () => {
     if (!inviteLink) return
@@ -833,10 +926,13 @@ function App() {
       const data = await response.json()
       if (!response.ok) throw new Error(data.detail || 'Could not delete this chat.')
 
-      const remainingSessions = chatSessions.filter((session) => session.id !== sessionId)
+      const remainingSessions = data.private_session
+        ? [data.private_session, ...chatSessions.filter((session) => session.id !== sessionId && session.id !== data.private_session.id)]
+        : chatSessions.filter((session) => session.id !== sessionId)
       setChatSessions(remainingSessions)
       if (sessionId === activeSessionId) {
-        if (remainingSessions.length) await openChatSession(remainingSessions[0].id)
+        if (data.private_session) await openChatSession(data.private_session.id)
+        else if (remainingSessions.length) await openChatSession(remainingSessions[0].id)
         else await createChatSession()
       }
     } catch (error) {
@@ -855,6 +951,15 @@ function App() {
       ? 'Nexa'
       : (message?.senderName || (message?.sender_user_id === user?.id ? 'You' : 'Member'))
   ), [user?.id])
+  const systemMessageText = useCallback((message) => {
+    if (!message?.systemAction) return message?.text || ''
+    const isTarget = message.target_user_id && message.target_user_id === user?.id
+    const subject = isTarget ? 'You' : (message.targetEmail || 'A user')
+    if (message.systemAction === 'added') return `${subject} ${isTarget ? 'were' : 'is'} added`
+    if (message.systemAction === 'removed') return `${subject} ${isTarget ? 'were' : 'is'} removed`
+    if (message.systemAction === 'left') return `${subject} left the chat`
+    return message.text || ''
+  }, [user?.id])
   const fallbackMessageDay = messages.find((message) => message.role !== 'system' && message.createdAt)?.createdAt
   const sessionDayLabel = visibleMessageDay || (fallbackMessageDay ? formatMessageDay(fallbackMessageDay) : '')
   const typingLabel = typingUsers.length === 1
@@ -1001,22 +1106,56 @@ function App() {
     return next.location
   }, [])
 
-  const acceptInviteFromUrl = useCallback(async () => {
-    const token = /^\/join\/([^/]+)$/.exec(window.location.pathname)?.[1]
+  const acceptInviteFromUrl = useCallback(async (options = {}) => {
+    const token = inviteTokenFromPath() || readPendingInviteToken()
     if (!token) return false
+    writePendingInviteToken(token)
+    const body = { token }
+    if (typeof options.sharePrivateConversation === 'boolean') {
+      body.share_private_conversation = options.sharePrivateConversation
+    }
     const response = await apiFetch(`${API_BASE}/api/chats/invites/accept`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',
-      body: JSON.stringify({ token }),
+      body: JSON.stringify(body),
     })
     const data = await response.json()
-    if (!response.ok) throw new Error(data.detail || 'Could not join this chat.')
+    if (!response.ok) {
+      if (response.status === 409 && data.detail?.code === 'rejoin_private_copy_choice_required') {
+        setPendingRejoinInvite({ token, sessionTitle: data.detail.session_title || 'this session' })
+        setAuthView(false)
+        return true
+      }
+      writePendingInviteToken('')
+      throw new Error(data.detail || 'Could not join this chat.')
+    }
+    writePendingInviteToken('')
+    setPendingRejoinInvite(null)
     window.history.replaceState({}, '', '/')
+    setJoinedInviteSessionId(data.session.invite_history_mode === 'none' && !data.session.rejoined ? data.session.id : '')
+    setChatSessions((current) => {
+      if (!data.session) return current
+      const withoutJoined = current.filter((session) => session.id !== data.session.id)
+      return [data.session, ...withoutJoined]
+    })
     await loadChatSessions()
     await openChatSession(data.session.id)
     return true
   }, [loadChatSessions, openChatSession])
+
+  const finishRejoinInvite = useCallback(async (sharePrivateConversation) => {
+    if (!pendingRejoinInvite?.token || rejoinBusy) return
+    setRejoinBusy(sharePrivateConversation ? 'share' : 'private')
+    try {
+      writePendingInviteToken(pendingRejoinInvite.token)
+      await acceptInviteFromUrl({ sharePrivateConversation })
+    } catch (error) {
+      setApiError(error.message || 'Could not rejoin this session.')
+    } finally {
+      setRejoinBusy('')
+    }
+  }, [acceptInviteFromUrl, pendingRejoinInvite, rejoinBusy])
 
   const completeSignIn = useCallback(async (signedInUser) => {
     setUser(signedInUser)
@@ -1407,8 +1546,16 @@ function App() {
       if (needsBrowserLocation && !chatLocation) {
         chatLocation = await requestSignedInLocation(user, { force: true })
         if (!chatLocation) {
-          const latestLocationState = readCachedLocation(user)
-          throw new Error(latestLocationState?.error || browserLocation.error || 'Nexa could not access browser location.')
+          const answerCreatedAt = new Date().toISOString()
+          setMessages((current) => [...current, {
+            id: Date.now() + 1,
+            role: 'assistant',
+            text: LOCATION_PERMISSION_REQUIRED_MESSAGE,
+            time: formatMessageTime(answerCreatedAt),
+            createdAt: answerCreatedAt,
+          }])
+          setIsOnline(true)
+          return
         }
       }
       const response = await apiFetch(`${API_BASE}/api/chat/stream`, {
@@ -1687,8 +1834,9 @@ function App() {
           const sessions = await loadChatSessions()
           if (sessions.length) await openChatSession(sessions[0].id)
           else await createChatSession()
-        } else if (/^\/join\/[^/]+$/.test(window.location.pathname)) {
+        } else if (inviteTokenFromPath()) {
           // Keep the invite URL intact; after sign-in the join effect redeems it.
+          writePendingInviteToken(inviteTokenFromPath())
           setAuthView(true)
         }
         const [
@@ -1774,6 +1922,7 @@ function App() {
 
   const activeSession = chatSessions.find((session) => session.id === activeSessionId)
   const sharedSessionActive = activeSessionIsShared
+  const showingJoinedInviteConfirmation = Boolean(joinedInviteSessionId && activeSessionId === joinedInviteSessionId)
   const agentMode = sharedSessionActive && hasAgentMention(input)
   const composerValue = agentMode ? stripAgentMention(input) : input
   const agentSuggestionVisible = sharedSessionActive && !agentMode && AGENT_PARTIAL_PATTERN.test(input.trimStart())
@@ -1833,12 +1982,12 @@ function App() {
             <div className="chat-list-heading"><p className="section-label">RECENT CONVERSATIONS</p><button type="button" aria-label="Search chats"><Search size={15} /></button></div>
             <div className="chat-session-list">
               {chatSessions.map((session) => (
-                <div className={`chat-session-row ${session.id === activeSessionId ? 'active' : ''} ${session.unread_count ? 'has-unread' : ''}`} key={session.id}>
-                  <button type="button" className={`chat-session-button ${session.id === activeSessionId ? 'active' : ''}`} onClick={() => { openChatSession(session.id).catch((error) => setApiError(error.message)); setLeftPanelOpen(false) }}>
+                <div className={`chat-session-row ${session.id === activeSessionId ? 'active' : ''} ${session.unread_count > 0 || session.has_unread ? 'has-unread' : ''}`} key={session.id}>
+                  <button type="button" className={`chat-session-button ${session.id === activeSessionId ? 'active' : ''}`} onClick={() => { setJoinedInviteSessionId(''); openChatSession(session.id).catch((error) => setApiError(error.message)); setLeftPanelOpen(false) }}>
                     <span className="chat-session-title">{session.title}</span>
                     <span className="chat-session-meta">
                       {session.shared && <small className="session-member-count"><Users size={12} />{session.member_count || 2}</small>}
-                      {session.unread_count > 0 && <small className="session-unread-badge" aria-label={`${session.unread_count} unread message${session.unread_count === 1 ? '' : 's'}`}>{session.unread_count > 9 ? '9+' : session.unread_count}</small>}
+                      {(session.unread_count > 0 || session.has_unread) && <small className="session-unread-badge" aria-label={`${session.unread_count || 'Unread'} unread message${session.unread_count === 1 ? '' : 's'}`}>{session.unread_count > 9 ? '9+' : session.unread_count || '!'}</small>}
                     </span>
                   </button>
                   <button
@@ -1875,7 +2024,7 @@ function App() {
           </div>
         </aside>
 
-        <section className="chat-stage" aria-label="Nexa conversation">
+        <section className={`chat-stage ${showingJoinedInviteConfirmation ? 'invite-confirmation' : ''}`} aria-label="Nexa conversation">
 
           {user && activeSessionId && (
             <div className="session-collaboration-bar">
@@ -1913,14 +2062,51 @@ function App() {
           )}
 
           {shareDialogOpen && (
-            <div className="share-dialog-overlay" role="presentation" onMouseDown={() => setShareDialogOpen(false)}>
+            <div className="share-dialog-overlay" role="presentation" onMouseDown={closeShareDialog}>
               <section className="share-dialog" role="dialog" aria-modal="true" aria-label="Share chat invite" onMouseDown={(event) => event.stopPropagation()}>
-                <div className="share-dialog-head"><div><span className="section-label">SHARE SESSION</span><h2>Invite collaborators</h2></div><button type="button" onClick={() => setShareDialogOpen(false)} aria-label="Close share dialog"><X size={18} /></button></div>
-                <div className="share-link-row"><Link2 size={17} /><input value={inviteLink} readOnly aria-label="Invite link" /><button type="button" onClick={copyInviteLink}><Copy size={15} />{inviteCopied ? 'Copied' : 'Copy'}</button></div>
-                <div className="share-app-links">
+                <div className="share-dialog-head"><div><span className="section-label">SHARE SESSION</span><h2>Invite collaborators</h2></div><button type="button" onClick={closeShareDialog} aria-label="Close share dialog"><X size={18} /></button></div>
+                <div className="share-history-options" role="group" aria-label="Conversation history sharing">
+                  {shareHistoryOptions.map((option) => (
+                    <label className="share-history-option" key={option.value}>
+                      <input
+                        type="radio"
+                        name="share-history-mode"
+                        checked={(shareHistoryMode || 'none') === option.value}
+                        onChange={() => chooseShareHistoryMode(option.value)}
+                      />
+                      <span>{option.label}</span>
+                    </label>
+                  ))}
+                </div>
+                <div className="share-link-row"><Link2 size={17} /><input value={inviteLink} readOnly aria-label="Invite link" />{inviteLink ? <button type="button" onClick={copyInviteLink}><Copy size={15} />{inviteCopied ? 'Copied' : 'Copy'}</button> : <button type="button" disabled><Copy size={15} />Creating...</button>}</div>
+                {inviteLink && <div className="share-app-links">
                   <a href={`https://wa.me/?text=${encodeURIComponent(`Join my Nexa chat: ${inviteLink}`)}`} target="_blank" rel="noreferrer"><img src="/whatsapp.png" alt="" />WhatsApp</a>
                   <a href={`https://t.me/share/url?url=${encodeURIComponent(inviteLink)}&text=${encodeURIComponent('Join my Nexa chat')}`} target="_blank" rel="noreferrer"><img src="/telegram.png" alt="" />Telegram</a>
                   <a href={`https://x.com/intent/post?text=${encodeURIComponent(`Join my Nexa chat: ${inviteLink}`)}`} target="_blank" rel="noreferrer"><img src="/X.png" alt="" />X</a>
+                </div>}
+              </section>
+            </div>
+          )}
+
+          {pendingRejoinInvite && (
+            <div className="share-dialog-overlay rejoin-dialog-overlay" role="presentation">
+              <section className="share-dialog rejoin-dialog" role="dialog" aria-modal="true" aria-label="Rejoin grouped session">
+                <div className="share-dialog-head">
+                  <div>
+                    <span className="section-label">REJOIN SESSION</span>
+                    <h2>You are going to join the previous grouped session</h2>
+                  </div>
+                </div>
+                <p className="rejoin-dialog-copy">{pendingRejoinInvite.sessionTitle}</p>
+                <div className="share-history-options rejoin-options" role="radiogroup" aria-label="Private conversation sharing">
+                  <button type="button" className="share-history-option rejoin-option" onClick={() => finishRejoinInvite(true)} disabled={Boolean(rejoinBusy)}>
+                    <input type="radio" checked={rejoinBusy === 'share'} readOnly />
+                    <span>{rejoinBusy === 'share' ? 'Sharing private conversation...' : 'Do you want to share your private conversation'}</span>
+                  </button>
+                  <button type="button" className="share-history-option rejoin-option" onClick={() => finishRejoinInvite(false)} disabled={Boolean(rejoinBusy)}>
+                    <input type="radio" checked={rejoinBusy === 'private'} readOnly />
+                    <span>{rejoinBusy === 'private' ? 'Keeping private conversation private...' : 'Do not share my conversation'}</span>
+                  </button>
                 </div>
               </section>
             </div>
@@ -1935,7 +2121,11 @@ function App() {
           </div>
 
           <div className="conversation" ref={feedRef} aria-live="polite">
-            {activeSessionIsEmpty && <section className="empty-chat-hero">
+            {showingJoinedInviteConfirmation ? (
+              <article className="message system invite-joined-message">
+                <p className="system-message"><span className="system-message-pulse" aria-hidden="true" />You were added</p>
+              </article>
+            ) : activeSessionIsEmpty && <section className="empty-chat-hero">
               <div className="hero-orbit"><span /><Sparkles size={28} /></div>
               <p className="section-label">NEXA / INTELLIGENCE LAYER</p>
               <h2>What are we creating today?</h2>
@@ -1949,13 +2139,13 @@ function App() {
                 ))}
               </div>
             </section>}
-            {!activeSessionIsEmpty && messages.map((message) => (
+            {!showingJoinedInviteConfirmation && !activeSessionIsEmpty && messages.map((message) => (
               <article
                 className={`message ${message.role}`}
                 key={message.id}
                 {...(message.role !== 'system' && message.createdAt ? { 'data-message-day': formatMessageDay(message.createdAt) } : {})}
               >
-                {message.role === 'system' ? <p className="system-message"><span className="system-message-pulse" aria-hidden="true" />{message.text}</p> : <>
+                {message.role === 'system' ? <p className="system-message"><span className="system-message-pulse" aria-hidden="true" />{systemMessageText(message)}</p> : <>
                 {message.role === 'assistant' && (
                   <div className="assistant-avatar"><Logo /></div>
                 )}
