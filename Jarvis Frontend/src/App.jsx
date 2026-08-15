@@ -2309,7 +2309,7 @@ function App() {
                     </label>
                   ))}
                 </div>
-                <div className="share-link-row"><Link2 size={17} /><input value={inviteLink} readOnly aria-label="Invite link" />{inviteLink ? <button type="button" onClick={copyInviteLink}><Copy size={15} />{inviteCopied ? 'Copied' : 'Copy'}</button> : <button type="button" disabled><Copy size={15} />Creating...</button>}</div>
+                <div className="share-link-row"><Link2 size={20} /><input value={inviteLink} readOnly aria-label="Invite link" />{inviteLink ? <button type="button" onClick={copyInviteLink}><Copy size={15} />{inviteCopied ? 'Copied' : 'Copy'}</button> : <button type="button" disabled><Copy size={15} />Creating...</button>}</div>
                 {inviteLink && <div className="share-app-links">
                   <a href={`https://wa.me/?text=${encodeURIComponent(`Join my Nexa chat: ${inviteLink}`)}`} target="_blank" rel="noreferrer"><img src="/whatsapp.png" alt="" />WhatsApp</a>
                   <a href={`https://t.me/share/url?url=${encodeURIComponent(inviteLink)}&text=${encodeURIComponent('Join my Nexa chat')}`} target="_blank" rel="noreferrer"><img src="/telegram.png" alt="" />Telegram</a>
