@@ -13,12 +13,13 @@ from pathlib import Path
 from typing import Any
 
 from dotenv import load_dotenv
-from pymongo import ASCENDING, DESCENDING, MongoClient
+from pymongo import ASCENDING, DESCENDING, ReturnDocument, MongoClient
 from pymongo.errors import PyMongoError
 
 
 _chat_session_id: ContextVar[str] = ContextVar("nexa_chat_session_id", default="")
 _chat_user_id: ContextVar[str] = ContextVar("nexa_chat_user_id", default="")
+_chat_user_email: ContextVar[str] = ContextVar("nexa_chat_user_email", default="")
 _client: MongoClient | None = None
 _database = None
 ROOT = Path(__file__).resolve().parent
@@ -56,6 +57,9 @@ def _db():
         _database.chat_sessions.create_index([("user_id", ASCENDING), ("updated_at", DESCENDING)])
         _database.chat_messages.create_index([("session_id", ASCENDING), ("created_at", ASCENDING)])
         _database.chat_messages.create_index([("session_id", ASCENDING), ("role", ASCENDING), ("sender_user_id", ASCENDING), ("created_at", ASCENDING)])
+        _database.message_feedback.create_index([("message_id", ASCENDING), ("user_id", ASCENDING), ("created_at", DESCENDING)])
+        _database.research_runs.create_index([("user_id", ASCENDING), ("session_id", ASCENDING), ("started_at", DESCENDING)])
+        _database.research_runs.create_index("id", unique=True)
         _database.chat_participants.create_index([("session_id", ASCENDING), ("user_id", ASCENDING)], unique=True)
         _database.chat_participants.create_index([("user_id", ASCENDING), ("status", ASCENDING)])
         _database.chat_invites.create_index("token_hash", unique=True)
@@ -485,8 +489,14 @@ def _visible_message_query(session_id: str, user_id: str = "") -> dict[str, Any]
     return query
 
 
-def _message_public(item: dict[str, Any]) -> dict[str, Any]:
+def _message_public(item: dict[str, Any], viewer_user_id: str = "") -> dict[str, Any]:
     reply_to = item.get("reply_to")
+    feedback_by_user = item.get("feedback_by_user")
+    viewer_feedback = ""
+    if viewer_user_id and isinstance(feedback_by_user, dict):
+        entry = feedback_by_user.get(viewer_user_id)
+        if isinstance(entry, dict):
+            viewer_feedback = str(entry.get("reaction") or "")
     return {
         "id": str(item.get("id") or ""),
         "role": str(item["role"]),
@@ -497,6 +507,8 @@ def _message_public(item: dict[str, Any]) -> dict[str, Any]:
         "target_user_id": str(item.get("target_user_id") or ""),
         "target_email": str(item.get("target_email") or ""),
         "system_action": str(item.get("system_action") or ""),
+        "research_run_id": str(item.get("research_run_id") or ""),
+        "feedback": viewer_feedback,
         **({"reply_to": reply_to} if isinstance(reply_to, dict) else {}),
     }
 
@@ -505,7 +517,7 @@ def load_messages(session_id: str, limit: int = 200, user_id: str = "") -> list[
     db = _db()
     query = _visible_message_query(session_id, user_id)
     records = db.chat_messages.find(query).sort("created_at", ASCENDING).limit(limit)
-    return [_message_public(item) for item in records]
+    return [_message_public(item, user_id) for item in records]
 
 
 def reply_snapshot(session_id: str, user_id: str, reply_to_id: str = "", max_chars: int = 280) -> dict[str, str] | None:
@@ -545,7 +557,7 @@ def save_message(session_id: str, role: str, content: str, sender_user_id: str =
     db.chat_sessions.update_one({"id": session_id}, {"$set": {"updated_at": now}})
     if role == "user":
         db.chat_sessions.update_one({"id": session_id, "title": "New chat"}, {"$set": {"title": title}})
-    return _message_public(item)
+    return _message_public(item, sender_user_id)
 
 
 def save_exchange(
@@ -555,7 +567,8 @@ def save_exchange(
     answer_visibility: str = "shared",
     answer_visible_to_user_id: str = "",
     system_notice: str = "",
-) -> None:
+    research_run_id: str = "",
+) -> dict[str, Any]:
     db = _db()
     now = _now()
     latest_user = db.chat_messages.find_one({"session_id": session_id, "role": "user"}, sort=[("created_at", DESCENDING)])
@@ -570,6 +583,7 @@ def save_exchange(
         "visibility": "private" if answer_visibility == "private" else "shared",
         "visible_to_user_id": answer_visible_to_user_id if answer_visibility == "private" else "",
         "created_at": now,
+        "research_run_id": research_run_id,
     })
     if system_notice and db.chat_participants.count_documents({"session_id": session_id, "status": "active"}) > 1:
         messages.append({
@@ -584,18 +598,84 @@ def save_exchange(
     title = " ".join(query.split())[:72] or "New chat"
     db.chat_sessions.update_one({"id": session_id}, {"$set": {"updated_at": now}, "$setOnInsert": {"title": title}})
     db.chat_sessions.update_one({"id": session_id, "title": "New chat"}, {"$set": {"title": title}})
+    assistant_message = next(message for message in reversed(messages) if message.get("role") == "assistant")
+    return _message_public(assistant_message, answer_visible_to_user_id)
+
+
+def set_message_feedback(session_id: str, message_id: str, user_id: str, reaction: str) -> dict[str, Any]:
+    """Store one signed-in user's reaction for a visible assistant message."""
+    if reaction not in {"like", "dislike"}:
+        raise ValueError("Feedback must be either 'like' or 'dislike'.")
+    if not user_id:
+        raise ValueError("Sign in to leave feedback.")
+    query = _visible_message_query(session_id, user_id)
+    query.update({"id": message_id, "role": "assistant"})
+    now = _now()
+    try:
+        db = _db()
+        result = db.chat_messages.find_one_and_update(
+            query,
+            {"$set": {f"feedback_by_user.{user_id}": {"reaction": reaction, "updated_at": now}}},
+            return_document=ReturnDocument.AFTER,
+        )
+        if not result:
+            raise ValueError("Assistant message not found.")
+        db.message_feedback.insert_one({
+            "id": str(uuid.uuid4()),
+            "session_id": session_id,
+            "message_id": message_id,
+            "user_id": user_id,
+            "reaction": reaction,
+            "created_at": now,
+        })
+        return _message_public(result, user_id)
+    except PyMongoError as exc:
+        raise StoreUnavailable("Message feedback storage failed.") from exc
+
+
+def save_research_run(record: dict[str, Any]) -> None:
+    """Persist a user-scoped research artifact when MongoDB is configured."""
+    item = dict(record)
+    run_id = str(item.get("id") or "")
+    if not run_id:
+        raise ValueError("A research run requires an id.")
+    try:
+        _db().research_runs.replace_one({"id": run_id}, item, upsert=True)
+    except PyMongoError as exc:
+        raise StoreUnavailable("Research run storage failed.") from exc
+
+
+def update_research_run(run_id: str, updates: dict[str, Any]) -> bool:
+    if not run_id:
+        raise ValueError("A research run requires an id.")
+    try:
+        result = _db().research_runs.update_one({"id": run_id}, {"$set": dict(updates)})
+        return bool(result.matched_count)
+    except PyMongoError as exc:
+        raise StoreUnavailable("Research run storage failed.") from exc
+
+
+def list_research_runs(user_id: str, session_id: str = "", limit: int = 20) -> list[dict[str, Any]]:
+    query: dict[str, Any] = {"user_id": user_id}
+    if session_id:
+        query["session_id"] = session_id
+    records = _db().research_runs.find(query, {"_id": 0}).sort("started_at", DESCENDING).limit(max(1, min(int(limit), 50)))
+    return [dict(item) for item in records]
 
 
 class chat_session_context:
-    def __init__(self, session_id: str, user_id: str = "") -> None:
+    def __init__(self, session_id: str, user_id: str = "", user_email: str = "") -> None:
         self.session_id = session_id
         self.user_id = user_id
+        self.user_email = user_email
         self.token = None
         self.user_token = None
+        self.user_email_token = None
 
     def __enter__(self):
         self.token = _chat_session_id.set(self.session_id)
         self.user_token = _chat_user_id.set(self.user_id)
+        self.user_email_token = _chat_user_email.set(self.user_email)
         return self
 
     def __exit__(self, *_: object) -> None:
@@ -603,6 +683,8 @@ class chat_session_context:
             _chat_session_id.reset(self.token)
         if self.user_token is not None:
             _chat_user_id.reset(self.user_token)
+        if self.user_email_token is not None:
+            _chat_user_email.reset(self.user_email_token)
 
 
 def current_chat_session_id() -> str:
@@ -611,3 +693,7 @@ def current_chat_session_id() -> str:
 
 def current_chat_user_id() -> str:
     return _chat_user_id.get()
+
+
+def current_chat_user_email() -> str:
+    return _chat_user_email.get()

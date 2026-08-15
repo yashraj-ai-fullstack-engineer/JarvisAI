@@ -42,7 +42,14 @@ from pydantic import BaseModel, Field
 from starlette.concurrency import run_in_threadpool
 
 from Backend.AssistantEngine import AssistantStream
+from Backend.AgentArchitecture import RUN_STORE
 from Backend.Capabilities import capability_snapshot
+from Backend.DeepResearch import (
+    DeepResearchStream,
+    RESEARCH_RUN_STORE,
+    parse_research_command,
+    source_catalog,
+)
 from Backend.Chatbot import (
     Assistantname,
     ClearHistory,
@@ -66,12 +73,19 @@ from Backend.PDFQA import (
     answer_transient_pdf_question,
     remember_pdf_document,
 )
+from Backend.ResearchPdfService import (
+    ResearchPdfError,
+    create_or_reuse_export,
+    local_export_path,
+    remote_export_url,
+)
 from Backend.GoogleOAuth import (
     GoogleOAuthError,
     SESSION_COOKIE,
     complete_authorization,
     disconnect_service,
     google_session_context,
+    google_user_context,
     new_session_id,
     service_status,
     start_authorization,
@@ -109,6 +123,7 @@ from Backend.MongoStore import (
     save_google_login_state,
     save_message,
     session_participant,
+    set_message_feedback,
     set_participant_role,
     RejoinConfirmationRequired,
 )
@@ -197,7 +212,7 @@ app.add_middleware(
     # without broadening CORS access to non-local origins.
     allow_origin_regex=get_config("CORS_ALLOWED_ORIGIN_REGEX", r"https?://(localhost|127\.0\.0\.1):\d+"),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
 
@@ -223,6 +238,10 @@ class ChatRequest(BaseModel):
 class SessionMessageRequest(BaseModel):
     message: str = Field(min_length=1, max_length=10_000)
     reply_to_id: str = Field(default="", max_length=80)
+
+
+class MessageFeedbackRequest(BaseModel):
+    reaction: str = Field(pattern="^(like|dislike)$")
 
 
 class InviteAcceptRequest(BaseModel):
@@ -518,6 +537,72 @@ def chat_messages_api(session_id: str, request: Request) -> dict:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
+@app.put("/api/chats/{session_id}/messages/{message_id}/feedback")
+def message_feedback_api(
+    session_id: str,
+    message_id: str,
+    payload: MessageFeedbackRequest,
+    request: Request,
+) -> dict:
+    user = _require_chat_session(request, session_id)
+    try:
+        message = set_message_feedback(session_id, message_id, user["id"], payload.reaction)
+        return {"message_id": message["id"], "feedback": message["feedback"]}
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/chats/{session_id}/agent-runs")
+def agent_runs_api(session_id: str, request: Request, limit: int = 30) -> dict:
+    """Return a user's redacted agent activity for one chat session."""
+    user = _require_chat_session(request, session_id)
+    with chat_session_context(session_id, user["id"]):
+        return {"runs": RUN_STORE.list_for_current_user(limit)}
+
+
+@app.get("/api/chats/{session_id}/research-runs")
+def research_runs_api(session_id: str, request: Request, limit: int = 20) -> dict:
+    """Return persisted deep-research reports owned by the active user."""
+    user = _require_chat_session(request, session_id)
+    with chat_session_context(session_id, user["id"]):
+        return {"runs": RESEARCH_RUN_STORE.list_for_current_user(limit)}
+
+
+@app.get("/api/chats/{session_id}/research-runs/{run_id}/export.pdf")
+async def research_run_pdf_export_api(session_id: str, run_id: str, request: Request):
+    """Open a user's private research export inline in a browser PDF viewer."""
+    user = _require_chat_session(request, session_id)
+    with chat_session_context(session_id, user["id"]):
+        run = RESEARCH_RUN_STORE.get_for_current_user(run_id)
+        if not run:
+            # Do not distinguish an absent run from a run owned by someone
+            # else; the endpoint must not become an artifact enumeration API.
+            raise HTTPException(status_code=404, detail="Research report not found.")
+        try:
+            export = await run_in_threadpool(create_or_reuse_export, run)
+            RESEARCH_RUN_STORE.set_pdf_export(run_id, export)
+            if export.get("storage") == "supabase":
+                return RedirectResponse(remote_export_url(export), status_code=307)
+            return FileResponse(
+                local_export_path(export),
+                media_type="application/pdf",
+                filename=str(export.get("filename") or "nexa-research-report.pdf"),
+                content_disposition_type="inline",
+                headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"},
+            )
+        except ResearchPdfError as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/research/sources")
+def research_sources_api(request: Request) -> dict:
+    """Expose the live, closed research source registry to the signed-in UI."""
+    _authenticated_user(request)
+    return {"sources": source_catalog()}
+
+
 @app.delete("/api/chats/{session_id}")
 async def delete_chat_api(session_id: str, request: Request) -> dict:
     user = _authenticated_user(request)
@@ -684,8 +769,9 @@ async def chat_live_socket(session_id: str, websocket: WebSocket) -> None:
 
 @app.get("/api/capabilities")
 def capabilities(request: Request) -> dict:
-    _authenticated_user(request)
-    return capability_snapshot(mcp_status_snapshot())
+    user = _authenticated_user(request)
+    with google_user_context(user["id"]):
+        return capability_snapshot(mcp_status_snapshot())
 
 
 @app.get("/api/email/pending")
@@ -701,9 +787,10 @@ def mcp_servers_api(request: Request) -> dict:
 
 @app.get("/api/google/status")
 def google_status_api(request: Request) -> JSONResponse:
-    _authenticated_user(request)
+    user = _authenticated_user(request)
     session_id = _google_session_id(request) or new_session_id()
-    response = JSONResponse({"services": service_status(session_id)})
+    with google_user_context(user["id"]):
+        response = JSONResponse({"services": service_status(session_id, user["id"])})
     if not _google_session_id(request):
         _set_google_session_cookie(response, session_id)
     return response
@@ -728,10 +815,10 @@ def oauth_debug_api() -> dict:
 
 @app.get("/api/google/connect/{service}")
 def google_connect_api(service: str, request: Request) -> RedirectResponse:
-    _authenticated_user(request)
+    user = _authenticated_user(request)
     session_id = _google_session_id(request) or new_session_id()
     try:
-        url = start_authorization(service, session_id)
+        url = start_authorization(service, session_id, user["id"])
     except GoogleOAuthError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     response = RedirectResponse(url, status_code=302)
@@ -753,11 +840,12 @@ def google_oauth_callback(code: str = "", state: str = "", error: str = "") -> R
 
 @app.post("/api/google/disconnect/{service}")
 def google_disconnect_api(service: str, request: Request) -> dict:
+    user = _authenticated_user(request)
     session_id = _google_session_id(request)
     if not session_id:
         raise HTTPException(status_code=404, detail="No Google account is connected in this browser.")
     try:
-        disconnect_service(session_id, service)
+        disconnect_service(session_id, service, user["id"])
     except GoogleOAuthError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return {"ok": True, "service": service}
@@ -943,6 +1031,10 @@ async def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
         raise HTTPException(status_code=422, detail="Message cannot be empty.")
     user = _require_chat_session(http_request, request.session_id)
 
+    research_question = parse_research_command(message)
+    if research_question == "":
+        raise HTTPException(status_code=422, detail="Write a question after /research.")
+
     answer = ""
     plan_steps = []
     pending_email = None
@@ -953,8 +1045,13 @@ async def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     agent_message = _agent_query_with_reply_context(message, reply_to, user)
     with _chat_lock(http_request):
-        with chat_session_context(request.session_id, user["id"]), google_session_context(_google_session_id(http_request)):
-            async for event in AssistantStream(agent_message, request.location, history_query=message):
+        with chat_session_context(request.session_id, user["id"], user.get("email", "")), google_session_context(_google_session_id(http_request)), google_user_context(user["id"]):
+            stream = (
+                DeepResearchStream(research_question, history_query=message)
+                if research_question is not None
+                else AssistantStream(agent_message, request.location, history_query=message)
+            )
+            async for event in stream:
                 if event.get("type") == "status":
                     stage = event.get("stage", "Step")
                     status_message = event.get("message", "")
@@ -994,6 +1091,9 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         message = trigger.group(1).strip()
     if not message:
         raise HTTPException(status_code=422, detail="Message cannot be empty.")
+    research_question = parse_research_command(message)
+    if research_question == "":
+        raise HTTPException(status_code=422, detail="Write a question after /research.")
     try:
         reply_to = reply_snapshot(request.session_id, user["id"], request.reply_to_id)
         agent_reply_to = reply_snapshot(request.session_id, user["id"], request.reply_to_id, max_chars=0)
@@ -1007,8 +1107,13 @@ async def chat_stream(request: ChatRequest, http_request: Request):
             session_id = _google_session_id(http_request)
             # Keep the browser session ContextVar active for the entire async
             # execution so MCP tools receive the connected account token.
-            with chat_session_context(request.session_id, user["id"]), google_session_context(session_id):
-                async for event in AssistantStream(agent_message, request.location, history_query=message):
+            with chat_session_context(request.session_id, user["id"], user.get("email", "")), google_session_context(session_id), google_user_context(user["id"]):
+                stream = (
+                    DeepResearchStream(research_question, history_query=message)
+                    if research_question is not None
+                    else AssistantStream(agent_message, request.location, history_query=message)
+                )
+                async for event in stream:
                     if event.get("type") == "done" and not event.get("skip_chat") and event.get("answer"):
                         await live_sessions.broadcast(request.session_id, {"type": "refresh"})
                     yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"

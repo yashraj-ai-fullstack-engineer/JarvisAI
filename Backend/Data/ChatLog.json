@@ -1,14 +1,6 @@
 [
   {
     "role": "user",
-    "content": "open instagram"
-  },
-  {
-    "role": "assistant",
-    "content": "I tried, but the requested action could not be completed."
-  },
-  {
-    "role": "user",
     "content": "open youtube"
   },
   {
@@ -398,5 +390,13 @@
   {
     "role": "assistant",
     "content": "Hello! How can I help you today?"
+  },
+  {
+    "role": "user",
+    "content": "/research can you do the analysis of high performing stocks in the market in India as well as in the US market"
+  },
+  {
+    "role": "assistant",
+    "content": "## Research requires a verified source\nNexa needs its verified financial-market-data source before it can analyse or rank stocks. Configure FMP_API_KEY on the backend; it will not substitute ordinary web-search results."
   }
 ]

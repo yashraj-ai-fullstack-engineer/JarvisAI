@@ -17,6 +17,7 @@ from urllib.parse import urlencode
 import requests
 
 from Backend.LLMProvider import get_config
+from Backend.MongoStore import current_chat_user_id
 from Backend.Paths import DATA_DIR
 
 
@@ -25,6 +26,7 @@ DATA_PATH = DATA_DIR / "GoogleConnections.json"
 STATE_PATH = DATA_DIR / "GoogleOAuthStates.json"
 SESSION_COOKIE = "nexa_google_session"
 _SESSION_ID = contextvars.ContextVar("nexa_google_session_id", default="")
+_USER_ID = contextvars.ContextVar("nexa_google_user_id", default="")
 _JSON_LOCK = threading.RLock()
 
 GOOGLE_AUTH_URL = "https://accounts.google.com/o/oauth2/v2/auth"
@@ -160,6 +162,26 @@ class google_session_context:
             _SESSION_ID.reset(self.token)
 
 
+class google_user_context:
+    """Bind a delegated Google connection to an authenticated Nexa user."""
+
+    def __init__(self, user_id: str) -> None:
+        self.user_id = user_id
+        self.token: contextvars.Token[str] | None = None
+
+    def __enter__(self) -> "google_user_context":
+        self.token = _USER_ID.set(self.user_id)
+        return self
+
+    def __exit__(self, *_: object) -> None:
+        if self.token is not None:
+            _USER_ID.reset(self.token)
+
+
+def _active_user_id(user_id: str = "") -> str:
+    return user_id or _USER_ID.get() or current_chat_user_id()
+
+
 def _encrypted_token(tokens: dict[str, Any]) -> str:
     return _cipher().encrypt(json.dumps(tokens).encode("utf-8")).decode("utf-8")
 
@@ -184,27 +206,40 @@ def _save_records(records: list[dict[str, Any]]) -> None:
 
 
 def _record_index(
+    user_id: str,
     session_id: str,
     service: str,
     records: list[dict[str, Any]] | None = None,
 ) -> int | None:
-    for index, item in enumerate(records if records is not None else _records()):
-        if item.get("session_id") == session_id and item.get("service") == service:
+    values = records if records is not None else _records()
+    for index, item in enumerate(values):
+        if user_id and item.get("user_id") == user_id and item.get("service") == service:
             return index
+    # Old records were browser-cookie scoped. Only migrate a record that has
+    # no owner and is presented by the same browser session.
+    if user_id:
+        for index, item in enumerate(values):
+            if not item.get("user_id") and item.get("session_id") == session_id and item.get("service") == service:
+                return index
+    elif session_id:
+        for index, item in enumerate(values):
+            if item.get("session_id") == session_id and item.get("service") == service:
+                return index
     return None
 
 
-def _save_token(session_id: str, service: str, token: dict[str, Any], email: str = "") -> None:
+def _save_token(session_id: str, user_id: str, service: str, token: dict[str, Any], email: str = "") -> None:
     with _JSON_LOCK:
         records = _records()
         record = {
+            "user_id": user_id,
             "session_id": session_id,
             "service": service,
             "email": email,
             "token": _encrypted_token(token),
             "updated_at": _now().isoformat(),
         }
-        existing = _record_index(session_id, service, records)
+        existing = _record_index(user_id, session_id, service, records)
         if existing is None:
             records.append(record)
         else:
@@ -212,17 +247,27 @@ def _save_token(session_id: str, service: str, token: dict[str, Any], email: str
         _save_records(records)
 
 
-def _get_record(session_id: str, service: str) -> dict[str, Any] | None:
-    for item in _records():
-        if item.get("session_id") == session_id and item.get("service") == service:
-            return item
-    return None
+def _get_record(session_id: str, service: str, user_id: str = "") -> dict[str, Any] | None:
+    active_user_id = _active_user_id(user_id)
+    with _JSON_LOCK:
+        records = _records()
+        index = _record_index(active_user_id, session_id, service, records)
+        if index is None:
+            return None
+        record = records[index]
+        # One-time, safe migration of a legacy record requires possession of
+        # the original browser cookie and an authenticated user identity.
+        if active_user_id and not record.get("user_id"):
+            record = {**record, "user_id": active_user_id, "updated_at": _now().isoformat()}
+            records[index] = record
+            _save_records(records)
+        return record
 
 
-def service_status(session_id: str) -> list[dict[str, Any]]:
+def service_status(session_id: str, user_id: str = "") -> list[dict[str, Any]]:
     statuses = []
     for service, info in SERVICES.items():
-        record = _get_record(session_id, service) if session_id else None
+        record = _get_record(session_id, service, user_id) if (session_id or user_id) else None
         statuses.append({
             "service": service,
             "label": info["label"],
@@ -233,9 +278,11 @@ def service_status(session_id: str) -> list[dict[str, Any]]:
     return statuses
 
 
-def start_authorization(service: str, session_id: str) -> str:
+def start_authorization(service: str, session_id: str, user_id: str) -> str:
     if service not in SERVICES:
         raise GoogleOAuthError("Unknown Google service.")
+    if not user_id:
+        raise GoogleOAuthError("Sign in to Nexa before connecting a Google service.")
     if not google_oauth_is_configured():
         raise GoogleOAuthError(
             "Google OAuth is not configured. Add the client ID, client secret, redirect URI, and token key to .env."
@@ -256,6 +303,7 @@ def start_authorization(service: str, session_id: str) -> str:
             "state": state,
             "service": service,
             "session_id": session_id,
+            "user_id": user_id,
             "created_at": _now().isoformat(),
         })
         _write_json(STATE_PATH, states)
@@ -340,12 +388,19 @@ def complete_authorization(code: str, state: str) -> tuple[str, str]:
                     email = str(gmail_profile.json().get("emailAddress") or "")
             except (requests.RequestException, ValueError):
                 email = ""
-    _save_token(str(match["session_id"]), str(match["service"]), token, email)
+    _save_token(
+        str(match["session_id"]),
+        str(match.get("user_id") or ""),
+        str(match["service"]),
+        token,
+        email,
+    )
     return str(match["service"]), email
 
 
-def _access_token(session_id: str, service: str) -> str:
-    record = _get_record(session_id, service)
+def _access_token(session_id: str, service: str, user_id: str = "") -> str:
+    active_user_id = _active_user_id(user_id)
+    record = _get_record(session_id, service, active_user_id)
     if not record:
         raise GoogleOAuthError(f"Connect {SERVICES[service]['label']} before using it.")
     token = _decrypted_token(record)
@@ -373,7 +428,7 @@ def _access_token(session_id: str, service: str) -> str:
         token.update(new_token)
         token["refresh_token"] = token.get("refresh_token") or refresh_token
         token["expires_at"] = int((_now() + timedelta(seconds=int(token.get("expires_in", 3600)))).timestamp())
-        _save_token(session_id, service, token, str(record.get("email") or ""))
+        _save_token(session_id, active_user_id, service, token, str(record.get("email") or ""))
     access_token = str(token.get("access_token") or "")
     if not access_token:
         raise GoogleOAuthError("Google did not provide an access token. Connect this service again.")
@@ -382,7 +437,7 @@ def _access_token(session_id: str, service: str) -> str:
 
 def google_mcp_header(service: str) -> str:
     session_id = current_session_id()
-    if not session_id or service not in SERVICES:
+    if (not session_id and not _active_user_id()) or service not in SERVICES:
         return ""
     return f"Bearer {_access_token(session_id, service)}"
 
@@ -390,7 +445,7 @@ def google_mcp_header(service: str) -> str:
 def google_access_token(service: str) -> str:
     """Return an access token for the current browser session and service."""
     session_id = current_session_id()
-    if not session_id:
+    if not session_id and not _active_user_id():
         raise GoogleOAuthError("No browser session is available. Reconnect the Google service.")
     if service not in SERVICES:
         raise GoogleOAuthError("Unknown Google service.")
@@ -400,13 +455,13 @@ def google_access_token(service: str) -> str:
 def google_connected_email(service: str) -> str:
     """Return the connected account address for the current session."""
     session_id = current_session_id()
-    record = _get_record(session_id, service) if session_id and service in SERVICES else None
+    record = _get_record(session_id, service) if service in SERVICES else None
     return str(record.get("email") or "") if record else ""
 
 
 def google_mcp_connected(service: str) -> bool:
     session_id = current_session_id()
-    return bool(session_id and service in SERVICES and _get_record(session_id, service))
+    return bool(service in SERVICES and _get_record(session_id, service))
 
 
 def google_connection_signature() -> str:
@@ -423,14 +478,19 @@ def google_connection_signature() -> str:
     return ":".join(pieces)
 
 
-def disconnect_service(session_id: str, service: str) -> None:
+def disconnect_service(session_id: str, service: str, user_id: str = "") -> None:
     if service not in SERVICES:
         raise GoogleOAuthError("Unknown Google service.")
     with _JSON_LOCK:
         records = _records()
         retained = []
+        active_user_id = _active_user_id(user_id)
         for record in records:
-            if record.get("session_id") == session_id and record.get("service") == service:
+            owned = (
+                bool(active_user_id and record.get("user_id") == active_user_id)
+                or (not record.get("user_id") and record.get("session_id") == session_id)
+            )
+            if owned and record.get("service") == service:
                 try:
                     token = _decrypted_token(record)
                     refresh = str(token.get("refresh_token") or token.get("access_token") or "")

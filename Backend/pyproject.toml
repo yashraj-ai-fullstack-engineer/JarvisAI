@@ -14,6 +14,7 @@ dependencies = [
   "langgraph>=1.0,<2",
   "langchain-openai>=1.0,<2",
   "langchain-mcp-adapters>=0.3,<0.4",
+  "langsmith>=0.10,<1",
   "mcp>=1.24,<2",
   "cryptography>=44,<46",
   "pymongo[srv]>=4.10,<5",
@@ -22,4 +23,3 @@ dependencies = [
 
 [tool.vercel]
 entrypoint = "index:app"
-

@@ -1,9 +1,8 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import ReactMarkdown from 'react-markdown'
-import remarkGfm from 'remark-gfm'
-import { CircleHelp, Command, Copy, Crown, FileText, History, Link2, Moon, Plus, Reply, Search, SendHorizontal, Share2, Sparkles, Sun, Trash2, UserMinus, Users, X } from 'lucide-react'
+import { Check, CircleHelp, Command, Copy, Crown, FileText, History, Link2, Moon, Plus, Reply, Search, SendHorizontal, Share2, Sparkles, Sun, ThumbsDown, ThumbsUp, Trash2, UserMinus, Users, X } from 'lucide-react'
 import Particles, { ParticlesProvider } from '@tsparticles/react'
 import { loadSlim } from '@tsparticles/slim'
+import MarkdownResponse from './components/MarkdownResponse.jsx'
 import './App.css'
 
 const starterMessages = [
@@ -32,12 +31,19 @@ const shareHistoryOptions = [
 const API_BASE = (import.meta.env.VITE_API_URL || '').replace(/\/+$/, '')
 const AUTH_TOKEN_KEY = 'nexa.auth.token'
 const PENDING_INVITE_KEY = 'nexa.pendingInvite.token'
+const PENDING_GOOGLE_SERVICE_KEY = 'nexa.pendingGoogle.service'
 const THEME_KEY = 'nexa.theme'
 const LOCATION_CACHE_PREFIX = 'nexa.location.'
 const LOCATION_CACHE_TTL = 1000 * 60 * 30
 const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024
 const AGENT_PREFIX_PATTERN = /^@agent(?:\b|$)[\s,:-]*/i
 const AGENT_PARTIAL_PATTERN = /^@a(?:g(?:e(?:n(?:t?)?)?)?)?$/i
+const RESEARCH_COMMAND_PATTERN = /^\/research(?:\s|$)/i
+const GOOGLE_SERVICE_DEFAULTS = [
+  { service: 'gmail', label: 'Gmail', configured: true, connected: false, email: '' },
+  { service: 'google_calendar', label: 'Google Calendar', configured: true, connected: false, email: '' },
+  { service: 'google_drive', label: 'Google Drive', configured: true, connected: false, email: '' },
+]
 
 const locationRequestPattern = /\b(?:near me|around me|nearby|closest|nearest|from me|where am i|my location|directions?|route|distance|how far|how long|travel time|away|local|near my|restaurants?|cafes?|coffee shops?|hotels?|attractions?|pharmacies|hospitals?|gas stations?|petrol pumps?|atms?|parking|weather|forecast|traffic|places?)\b/i
 const LOCATION_PERMISSION_REQUIRED_MESSAGE = `Location permission is required to process this query. Kindly provide access and try again.
@@ -73,7 +79,7 @@ function readThemePreference() {
   } catch {
     // Theme still works for this session.
   }
-  return 'dark'
+  return 'light'
 }
 
 function authHeaders(headers = {}) {
@@ -107,6 +113,45 @@ function writePendingInviteToken(token = '') {
   } catch {
     // Invite links still work when the token remains in the URL.
   }
+}
+
+function readPendingGoogleService() {
+  try {
+    return window.sessionStorage.getItem(PENDING_GOOGLE_SERVICE_KEY) || ''
+  } catch {
+    return ''
+  }
+}
+
+function writePendingGoogleService(service = '') {
+  try {
+    if (service) window.sessionStorage.setItem(PENDING_GOOGLE_SERVICE_KEY, service)
+    else window.sessionStorage.removeItem(PENDING_GOOGLE_SERVICE_KEY)
+  } catch {
+    // OAuth still works; the UI just cannot preserve the interim status.
+  }
+}
+
+function mergeGoogleServices(services = []) {
+  const incoming = new Map((services || []).map((service) => [service.service, service]))
+  const merged = GOOGLE_SERVICE_DEFAULTS.map((fallback) => ({
+    ...fallback,
+    ...(incoming.get(fallback.service) || {}),
+  }))
+  for (const service of services || []) {
+    if (!GOOGLE_SERVICE_DEFAULTS.some((fallback) => fallback.service === service.service)) merged.push(service)
+  }
+  return merged
+}
+
+function googleIconForService(service = '') {
+  if (service === 'google_calendar') return 'calendar.png'
+  if (service === 'google_drive') return 'drive.png'
+  return 'gmail.png'
+}
+
+function compactGoogleLabel(label = '') {
+  return String(label || '').replace(/^Google\s+/i, '')
 }
 
 function formatMessageTime(value = new Date()) {
@@ -169,6 +214,8 @@ function messageWithDocumentReference(message, id) {
       target_user_id: message.target_user_id,
       targetEmail: message.target_email,
       systemAction: message.system_action,
+      researchRunId: message.research_run_id || '',
+      feedback: message.feedback || '',
       ...(replyTo ? { replyTo } : {}),
     }
   }
@@ -188,6 +235,8 @@ function messageWithDocumentReference(message, id) {
     target_user_id: message.target_user_id,
     targetEmail: message.target_email,
     systemAction: message.system_action,
+    researchRunId: message.research_run_id || '',
+    feedback: message.feedback || '',
     ...(replyTo ? { replyTo } : {}),
   }
 }
@@ -206,6 +255,7 @@ function areMessagesEquivalent(current, next) {
       && message.target_user_id === candidate.target_user_id
       && message.targetEmail === candidate.targetEmail
       && message.systemAction === candidate.systemAction
+      && message.feedback === candidate.feedback
       && JSON.stringify(message.replyTo || null) === JSON.stringify(candidate.replyTo || null)
   })
 }
@@ -305,36 +355,6 @@ function currentBrowserLocation() {
   })
 }
 
-function MarkdownLink({ node, ...props }) {
-  void node
-  return <a {...props} target="_blank" rel="noopener noreferrer" />
-}
-
-function MarkdownTable({ node, ...props }) {
-  void node
-  return <div className="markdown-table-wrap"><table {...props} /></div>
-}
-
-const markdownComponents = {
-  a: MarkdownLink,
-  table: MarkdownTable,
-}
-
-const MarkdownMessage = memo(function MarkdownMessage({ children, streaming = false }) {
-  return (
-    <div className={`markdown-body ${streaming ? 'live-answer' : ''}`}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
-        components={markdownComponents}
-        skipHtml
-      >
-        {children}
-      </ReactMarkdown>
-      {streaming && <span className="stream-cursor" aria-hidden="true" />}
-    </div>
-  )
-})
-
 function parseMarkdownTables(text = '') {
   const lines = text.split('\n')
   const tables = []
@@ -431,15 +451,20 @@ function parseResearchSections(text = '') {
   return reportLike ? sections.slice(0, 6) : []
 }
 
-const AnswerCards = memo(function AnswerCards({ message }) {
+const AnswerCards = memo(function AnswerCards({ message, sessionId }) {
   const text = message.text || ''
   const tables = parseMarkdownTables(text)
   const chart = tables.map(chartFromTable).find(Boolean)
   const reportSections = parseResearchSections(text)
   const pdfCitations = message.cards?.pdfCitations || []
   const document = message.cards?.document || null
+  const researchPdfUrl = message.researchRunId && sessionId
+    ? `${API_BASE}/api/chats/${encodeURIComponent(sessionId)}/research-runs/${encodeURIComponent(message.researchRunId)}/export.pdf`
+    : ''
   const [activeReportTab, setActiveReportTab] = useState(0)
   const [copiedTable, setCopiedTable] = useState('')
+  const [isOpeningPdf, setIsOpeningPdf] = useState(false)
+  const [pdfOpenError, setPdfOpenError] = useState('')
 
   if (!tables.length && !chart && !reportSections.length && !pdfCitations.length) return null
 
@@ -450,6 +475,41 @@ const AnswerCards = memo(function AnswerCards({ message }) {
       window.setTimeout(() => setCopiedTable(''), 1400)
     } catch {
       setCopiedTable('')
+    }
+  }
+
+  const openResearchPdf = async () => {
+    if (!researchPdfUrl || isOpeningPdf) return
+    // Open synchronously in the click event so browser popup protection does
+    // not block the PDF tab while the authenticated request is in flight.
+    const pdfTab = window.open('about:blank', '_blank')
+    if (pdfTab) {
+      pdfTab.opener = null
+      pdfTab.document.title = 'Preparing Nexa research PDF…'
+    }
+    setIsOpeningPdf(true)
+    setPdfOpenError('')
+    try {
+      const response = await apiFetch(researchPdfUrl, { credentials: 'include' })
+      if (!response.ok) {
+        const payload = await response.json().catch(() => ({}))
+        throw new Error(payload.detail || 'Nexa could not create the research PDF.')
+      }
+      const blob = await response.blob()
+      if (blob.type && !blob.type.includes('pdf')) throw new Error('Nexa did not return a PDF file.')
+      const blobUrl = URL.createObjectURL(blob)
+      if (pdfTab) {
+        pdfTab.location.replace(blobUrl)
+        window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000)
+      } else {
+        URL.revokeObjectURL(blobUrl)
+        throw new Error('Your browser blocked the PDF tab. Allow pop-ups for Nexa and try again.')
+      }
+    } catch (error) {
+      if (pdfTab && !pdfTab.closed) pdfTab.close()
+      setPdfOpenError(error.message || 'Nexa could not open the research PDF.')
+    } finally {
+      setIsOpeningPdf(false)
     }
   }
 
@@ -541,6 +601,15 @@ const AnswerCards = memo(function AnswerCards({ message }) {
               <span>REPORT VIEW</span>
               <strong>Section navigator</strong>
             </div>
+            {researchPdfUrl && (
+              <button className="report-pdf-link" type="button" onClick={openResearchPdf} disabled={isOpeningPdf}>
+                <span className="report-pdf-mark" aria-hidden="true"><img src="/pdf.png" alt="" /></span>
+                <span className="report-pdf-copy">
+                  <p>{isOpeningPdf ? 'Preparing PDF…' : 'Export PDF'}</p>
+                  {/* <small>{isOpeningPdf ? 'Creating your report' : 'Open full report'}</small> */}
+                </span>
+              </button>
+            )}
           </div>
           <div className="report-tabs" role="tablist" aria-label="Report sections">
             {reportSections.map((section, index) => (
@@ -555,10 +624,61 @@ const AnswerCards = memo(function AnswerCards({ message }) {
             ))}
           </div>
           <div className="report-panel">
-            <MarkdownMessage>{reportSections[activeReportTab]?.content || ''}</MarkdownMessage>
+            <MarkdownResponse>{reportSections[activeReportTab]?.content || ''}</MarkdownResponse>
           </div>
+          {pdfOpenError && <p className="report-pdf-error" role="alert">{pdfOpenError}</p>}
         </section>
       )}
+    </div>
+  )
+})
+
+const AssistantResponseActions = memo(function AssistantResponseActions({ message, canSaveFeedback, onFeedback }) {
+  const [copied, setCopied] = useState(false)
+  const [busy, setBusy] = useState(false)
+
+  const copyResponse = async () => {
+    try {
+      await navigator.clipboard.writeText(String(message.text || ''))
+      setCopied(true)
+      window.setTimeout(() => setCopied(false), 1400)
+    } catch {
+      setCopied(false)
+    }
+  }
+
+  const submitFeedback = async (reaction) => {
+    if (!canSaveFeedback || busy || message.feedback === reaction) return
+    setBusy(true)
+    try {
+      await onFeedback(message, reaction)
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <div className="assistant-response-actions" aria-label="Response actions">
+      <button
+        type="button"
+        className={message.feedback === 'like' ? 'is-selected' : ''}
+        onClick={() => submitFeedback('like')}
+        disabled={!canSaveFeedback || busy}
+        aria-label="Like response"
+        title="Like"
+      ><ThumbsUp size={14} /></button>
+      <button
+        type="button"
+        className={message.feedback === 'dislike' ? 'is-selected' : ''}
+        onClick={() => submitFeedback('dislike')}
+        disabled={!canSaveFeedback || busy}
+        aria-label="Dislike response"
+        title="Dislike"
+      ><ThumbsDown size={14} /></button>
+      {/* <span aria-hidden="true" /> */}
+      <button type="button" onClick={copyResponse} aria-label="Copy response" title={copied ? 'Copied' : 'Copy response'}>
+        {copied ? <Check size={14} /> : <Copy size={14} />}
+      </button>
     </div>
   )
 })
@@ -573,8 +693,8 @@ const initialiseParticles = async (engine) => {
 
 function AmbientParticles({ id = 'nexa-particles', className = 'ambient-particles', compact = false }) {
   const palette = compact
-    ? ['#78f2c5', '#9fb5ff']
-    : ['#78f2c5', '#8aa4ff', '#eef7ff']
+    ? ['#8f7bff', '#9fb5ff']
+    : ['#8f7bff', '#8aa4ff', '#f4f1ff']
   return <ParticlesProvider init={initialiseParticles}><Particles
     id={id}
     className={className}
@@ -621,7 +741,7 @@ function AmbientParticles({ id = 'nexa-particles', className = 'ambient-particle
         },
         shadow: {
           enable: true,
-          color: '#78f2c5',
+          color: '#8f7bff',
           blur: compact ? 5 : 9,
         },
         shape: { type: 'circle' },
@@ -702,7 +822,7 @@ function App() {
   const [thinkingEvents, setThinkingEvents] = useState([])
   const [liveAnswer, setLiveAnswer] = useState('')
   const [mcpServers, setMcpServers] = useState([])
-  const [googleServices, setGoogleServices] = useState([])
+  const [googleServices, setGoogleServices] = useState(() => mergeGoogleServices())
   const [capabilities, setCapabilities] = useState({ local: [], google: [] })
   const [googleActionBusy, setGoogleActionBusy] = useState('')
   const [pendingEmail, setPendingEmail] = useState(null)
@@ -801,7 +921,7 @@ function App() {
     setActiveSessionId(sessionId)
     setReplyTarget(null)
     const nextMessages = data.messages.length
-      ? data.messages.map((message, index) => messageWithDocumentReference(message, `${sessionId}-${index}`))
+      ? data.messages.map((message, index) => messageWithDocumentReference(message, message.id || `${sessionId}-${index}`))
       : starterMessages
     setMessages((current) => areMessagesEquivalent(current, nextMessages) ? current : nextMessages)
     if (options.markRead !== false) markSessionRead(sessionId).catch(() => {})
@@ -1018,6 +1138,28 @@ function App() {
     setReplyTarget(preview)
   }, [])
 
+  const submitAssistantFeedback = useCallback(async (message, reaction) => {
+    if (!activeSessionId || !message?.id) return
+    try {
+      const response = await apiFetch(
+        `${API_BASE}/api/chats/${encodeURIComponent(activeSessionId)}/messages/${encodeURIComponent(message.id)}/feedback`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          credentials: 'include',
+          body: JSON.stringify({ reaction }),
+        },
+      )
+      const data = await response.json().catch(() => ({}))
+      if (!response.ok) throw new Error(data.detail || 'Could not save feedback.')
+      setMessages((current) => current.map((item) => (
+        String(item.id) === String(message.id) ? { ...item, feedback: data.feedback || reaction } : item
+      )))
+    } catch (error) {
+      setApiError(error.message || 'Could not save feedback.')
+    }
+  }, [activeSessionId])
+
   const activateAgentMention = useCallback(() => {
     setInput((current) => {
       const remainder = stripAgentMention(current)
@@ -1195,7 +1337,8 @@ function App() {
       const response = await apiFetch(`${API_BASE}/api/google/status`, { credentials: 'include' })
       if (!response.ok) return
       const data = await response.json()
-      setGoogleServices(data.services || [])
+      setGoogleServices(mergeGoogleServices(data.services || []))
+      writePendingGoogleService('')
     } catch {
       // Google connections are optional and should not affect the chat UI.
     }
@@ -1212,11 +1355,17 @@ function App() {
   }, [])
 
   const connectGoogleService = useCallback((service) => {
+    if (googleActionBusy) return
+    setGoogleActionBusy(service)
+    writePendingGoogleService(service)
+    setGoogleServices((current) => mergeGoogleServices(current).map((item) => (
+      item.service === service ? { ...item, connecting: true } : item
+    )))
     const url = new URL(`${API_BASE}/api/google/connect/${service}`, window.location.origin)
     const token = readAuthToken()
     if (token) url.searchParams.set('auth_token', token)
     window.location.assign(url.toString())
-  }, [])
+  }, [googleActionBusy])
 
   const disconnectGoogleService = useCallback(async (service) => {
     if (googleActionBusy) return
@@ -1229,6 +1378,9 @@ function App() {
       })
       const data = await response.json()
       if (!response.ok) throw new Error(data.detail || 'Could not disconnect Google service.')
+      setGoogleServices((current) => mergeGoogleServices(current).map((item) => (
+        item.service === service ? { ...item, connected: false, email: '' } : item
+      )))
       await loadGoogleServices()
       await loadMcpServers()
       await loadCapabilities()
@@ -1389,12 +1541,21 @@ function App() {
     const agentMatch = /^@agent\b[\s,:-]*(.+)$/is.exec(cleanMessage)
     const usesAgent = !sharedSession || Boolean(agentMatch)
     const agentPrompt = agentMatch ? agentMatch[1].trim() : cleanMessage
+    const researchMode = RESEARCH_COMMAND_PATTERN.test(agentPrompt)
     if (agentMatch && !agentPrompt) {
       setApiError('Add a prompt after @Agent.')
       return
     }
+    if (researchMode && !/^\/research\s+\S/i.test(agentPrompt)) {
+      setApiError('Write a research question after /research.')
+      return
+    }
     if ((attachedPdf || /^doc:\s*/i.test(agentPrompt)) && !usesAgent) {
       setApiError('Start AI and document requests with @Agent in shared sessions.')
+      return
+    }
+    if (attachedPdf && researchMode) {
+      setApiError('Deep research currently uses online sources. Remove the PDF or ask about it in a normal message.')
       return
     }
     const createdAt = new Date().toISOString()
@@ -1457,14 +1618,22 @@ function App() {
       }
       return
     }
-    setThinkingStatus(attachedPdf ? 'Reading attached PDF' : 'Connecting to Nexa')
-    setThinkingDetail(attachedPdf ? 'Extracting text, indexing chunks, and searching the document.' : 'Opening a live stream to the local backend.')
+    setThinkingStatus(attachedPdf ? 'Reading attached PDF' : researchMode ? 'Preparing deep research' : 'Connecting to Nexa')
+    setThinkingDetail(attachedPdf
+      ? 'Extracting text, indexing chunks, and searching the document.'
+      : researchMode
+        ? 'Selecting only relevant verified research sources for this question.'
+        : 'Opening a live stream to the local backend.')
     setThinkingEvents([
       {
         id: `thinking-${Date.now()}`,
-        stage: attachedPdf ? 'PDF' : 'Connect',
-        message: attachedPdf ? 'Reading attached PDF' : 'Connecting to Nexa',
-        detail: attachedPdf ? 'Extracting text, indexing chunks, and searching the document.' : 'Opening a live stream to the local backend.',
+        stage: attachedPdf ? 'PDF' : researchMode ? 'Research' : 'Connect',
+        message: attachedPdf ? 'Reading attached PDF' : researchMode ? 'Preparing deep research' : 'Connecting to Nexa',
+        detail: attachedPdf
+          ? 'Extracting text, indexing chunks, and searching the document.'
+          : researchMode
+            ? 'Selecting only relevant verified research sources for this question.'
+            : 'Opening a live stream to the local backend.',
       },
     ])
     setLiveAnswer('')
@@ -1576,6 +1745,8 @@ function App() {
       let confirmationEmail = null
       let confirmationAction = null
       let skipChatMessage = false
+      let researchRunId = ''
+      let assistantMessageId = ''
       let streamFinished = false
       let lastLiveAnswerUpdateAt = 0
 
@@ -1603,6 +1774,14 @@ function App() {
               // running internal trace. Each status replaces the last one.
               return [nextEvent]
             })
+          } else if (event.type === 'research_plan') {
+            const labels = (event.sources || []).map((source) => source.label).filter(Boolean)
+            const detail = labels.length
+              ? `Selected sources: ${labels.join(', ')}.`
+              : 'No research sources were selected.'
+            setThinkingStatus('Research plan ready')
+            setThinkingDetail(detail)
+            setThinkingEvents([{ id: `research-plan-${Date.now()}`, stage: 'Research plan', message: 'Research plan ready', detail }])
           } else if (event.type === 'confirm_email') {
             confirmationEmail = event.email || null
             applyPendingEmail(event.email || null)
@@ -1621,6 +1800,8 @@ function App() {
           } else if (event.type === 'done') {
             completedAnswer = event.answer || ''
             skipChatMessage = Boolean(event.skip_chat)
+            researchRunId = event.research_run_id || ''
+            assistantMessageId = event.assistant_message_id || ''
             streamFinished = true
             break
           }
@@ -1639,11 +1820,13 @@ function App() {
         setLiveAnswer(completedAnswer)
         const answerCreatedAt = new Date().toISOString()
         setMessages((current) => [...current, {
-          id: Date.now() + 1,
+          id: assistantMessageId || (Date.now() + 1),
           role: 'assistant',
           text: completedAnswer,
           time: formatMessageTime(answerCreatedAt),
           createdAt: answerCreatedAt,
+          researchRunId,
+          feedback: '',
         }])
         loadChatSessions().catch(() => {})
       }
@@ -1825,6 +2008,10 @@ function App() {
       try {
         const params = new URLSearchParams(window.location.search)
         const authToken = params.get('token') || ''
+        const googleConnectedService = params.get('google') === 'connected' ? params.get('service') || readPendingGoogleService() : ''
+        const pendingGoogleService = readPendingGoogleService()
+        if (pendingGoogleService) setGoogleActionBusy(pendingGoogleService)
+        if (googleConnectedService) setGoogleActionBusy(googleConnectedService)
         if (authToken) writeAuthToken(authToken)
         const authResponse = await apiFetch(`${API_BASE}/api/auth/me`, { credentials: 'include' })
         if (authResponse.ok) {
@@ -1865,18 +2052,28 @@ function App() {
           setPendingMcpAction((await pendingMcpResponse.json()).pending_action || null)
         }
         if (googleServicesResponse.ok) {
-          setGoogleServices((await googleServicesResponse.json()).services || [])
+          const services = (await googleServicesResponse.json()).services || []
+          setGoogleServices(mergeGoogleServices(services))
+          const verifiedService = services.find((service) => service.service === googleConnectedService)
+          if (googleConnectedService && !verifiedService?.connected) {
+            setApiError(`Google completed the authorization redirect, but Nexa could not verify the ${googleConnectedService.replaceAll('_', ' ')} connection. Reconnect it from Settings.`)
+          }
+          writePendingGoogleService('')
         }
         if (capabilitiesResponse.ok) {
           setCapabilities(await capabilitiesResponse.json())
         }
         if (params.get('google') === 'error') {
+          writePendingGoogleService('')
+          setGoogleActionBusy('')
           setApiError(params.get('detail') || 'Google account connection was not completed.')
         }
         if (params.has('google') || params.has('auth') || params.has('token')) window.history.replaceState({}, '', window.location.pathname)
         setIsOnline(true)
+        setGoogleActionBusy('')
       } catch {
         setIsOnline(false)
+        setGoogleActionBusy('')
         setApiError('Nexa API is offline. Start the backend to begin chatting.')
       }
     }
@@ -1935,14 +2132,14 @@ function App() {
         <a className="brand" href="/" aria-label="Nexa home">
           <span className="brand-emblem"><Logo /></span>
           <span className="brand-copy">
-            <strong>NEXA</strong>
-            <small>Personal intelligence</small>
+            <strong>nexa</strong>
+            <small>your workspace, understood</small>
           </span>
         </a>
 
         <div className="system-state">
           <Sparkles size={14} />
-          <span>{isOnline ? 'Nexa is ready' : 'Agent offline'}</span>
+          <span>{isOnline ? 'Workspace ready' : 'Reconnecting'}</span>
         </div>
 
         <div className="topbar-actions">
@@ -1979,7 +2176,7 @@ function App() {
           <button className="mobile-drawer-close" type="button" onClick={() => setLeftPanelOpen(false)} aria-label="Close chat sessions"><X size={18} /></button>
           <div className="chat-sidebar-content">
             <button className="new-chat-button" type="button" disabled={activeSessionIsEmpty} onClick={() => user ? createChatSession().catch((error) => setApiError(error.message)) : setAuthView(true)}><Plus size={17} /> New chat <span>⌘ K</span></button>
-            <div className="chat-list-heading"><p className="section-label">RECENT CONVERSATIONS</p><button type="button" aria-label="Search chats"><Search size={15} /></button></div>
+            <div className="chat-list-heading"><p className="section-label">CONVERSATIONS</p><button type="button" aria-label="Search chats"><Search size={15} /></button></div>
             <div className="chat-session-list">
               {chatSessions.map((session) => (
                 <div className={`chat-session-row ${session.id === activeSessionId ? 'active' : ''} ${session.unread_count > 0 || session.has_unread ? 'has-unread' : ''}`} key={session.id}>
@@ -2004,6 +2201,40 @@ function App() {
               ))}
               {!user && <p>Send a message to sign in and start saving chats.</p>}
             </div>
+            <section className="connected-tools-mini" aria-label="Connected tools">
+              <div className="connected-tools-mini-head">
+                <p className="section-label">CONNECTED TOOLS</p>
+                <span aria-hidden="true">⌘</span>
+              </div>
+              {mergeGoogleServices(googleServices).map((service) => {
+                const isBusy = googleActionBusy === service.service || service.connecting
+                const statusText = isBusy ? (service.connected ? 'Disconnecting...' : 'Connecting...') : service.connected ? 'Connected' : 'Not connected'
+                return (
+                  <button
+                    className={`connected-tool-row ${service.connected ? 'connected' : ''} ${isBusy ? 'loading' : ''}`}
+                    type="button"
+                    key={service.service}
+                    onClick={() => service.connected ? disconnectGoogleService(service.service) : connectGoogleService(service.service)}
+                    disabled={isBusy}
+                    title={service.connected ? `Disconnect ${service.label}${service.email ? ` (${service.email})` : ''}` : `Connect ${service.label}`}
+                  >
+                    <img src={`/${googleIconForService(service.service)}`} alt="" />
+                    <span>
+                      <strong>{compactGoogleLabel(service.label)}</strong>
+                      <small>{service.email && service.connected ? service.email : statusText}</small>
+                    </span>
+                    <i className={service.connected ? 'connected' : ''} aria-label={statusText} />
+                  </button>
+                )
+              })}
+              {mcpServers.filter((server) => server.active && !server.oauth_service).slice(0, 3).map((server) => (
+                <div className="connected-tool-row passive" key={server.name}>
+                  <span className="tool-letter">{server.label.charAt(0)}</span>
+                  <span><strong>{server.label}</strong><small>{server.read_only ? 'Read-only access' : 'Connected'}</small></span>
+                  <i className="connected" aria-label="Connected" />
+                </div>
+              ))}
+            </section>
           </div>
           {/* <div className="core-card core-card-bottom">
             <div className={`core-visual ${isThinking ? 'processing' : ''}`}>
@@ -2029,7 +2260,7 @@ function App() {
           {user && activeSessionId && (
             <div className="session-collaboration-bar">
               <div>
-                <span className="section-label">{activeSession?.shared ? 'SHARED SESSION' : 'PRIVATE SESSION'}</span>
+                <span className="section-label">{activeSession?.shared ? 'SHARED' : 'PRIVATE'}</span>
                 <strong>{activeSession?.title || 'New chat'}</strong>
               </div>
               {sessionDayLabel && <span className="session-day-label">{sessionDayLabel}</span>}
@@ -2172,8 +2403,13 @@ function App() {
                   {message.role === 'assistant'
                     ? (
                       <>
-                        <MarkdownMessage>{message.text}</MarkdownMessage>
-                        <AnswerCards message={message} />
+                        <MarkdownResponse>{message.text}</MarkdownResponse>
+                        <AnswerCards message={message} sessionId={activeSessionId} />
+                        <AssistantResponseActions
+                          message={message}
+                          canSaveFeedback={Boolean(activeSessionId && typeof message.id === 'string' && message.id.length > 20)}
+                          onFeedback={submitAssistantFeedback}
+                        />
                       </>
                     )
                     : (
@@ -2207,7 +2443,7 @@ function App() {
                       <strong>{thinkingStatus || 'Working on your request'}</strong>
                     </div>
                   </div>
-                  {liveAnswer && <MarkdownMessage streaming>{liveAnswer}</MarkdownMessage>}
+                  {liveAnswer && <MarkdownResponse streaming>{liveAnswer}</MarkdownResponse>}
                 </div>
               </article>
             )}
@@ -2403,6 +2639,7 @@ function App() {
               </div>
             )}
 
+            <div className="composer-workspace-hint"><span>✦</span> Nexa can search across your connected workspace <small>⌘</small></div>
             <form className={`text-composer ${agentMode ? 'agent-mode' : ''}`} onSubmit={(event) => { event.preventDefault(); sendMessage() }}>
               <input
                 ref={pdfInputRef}
@@ -2504,6 +2741,10 @@ function App() {
                       <button type="button" onClick={() => insertComposerCommand(sharedSessionActive ? '@Agent Doc: ' : 'Doc: ')}>
                         <code>Doc:</code>
                         <span>Search your saved documents and answer from them.</span>
+                      </button>
+                      <button type="button" onClick={() => insertComposerCommand(sharedSessionActive ? '@Agent /research ' : '/research ')}>
+                        <code>/research</code>
+                        <span>Run a cited deep-research report using relevant public sources.</span>
                       </button>
                       <div className="composer-help-row">
                         <code>Reply</code>
@@ -2715,6 +2956,3 @@ function App() {
 }
 
 export default App
-
-
-

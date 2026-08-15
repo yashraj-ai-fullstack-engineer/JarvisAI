@@ -94,28 +94,31 @@ def SaveExchange(
     answer_visibility: str = "shared",
     answer_visible_to_user_id: str = "",
     system_notice: str = "",
-) -> None:
+    research_run_id: str = "",
+) -> dict | None:
     """Persist a completed exchange in the current browser session history."""
     chat_session_id = current_chat_session_id()
     if chat_session_id:
         try:
-            mongo_save_exchange(
+            return mongo_save_exchange(
                 chat_session_id,
                 query,
                 answer,
                 answer_visibility=answer_visibility,
                 answer_visible_to_user_id=answer_visible_to_user_id,
                 system_notice=system_notice,
+                research_run_id=research_run_id,
             )
-            return
         except StoreUnavailable:
-            return
+            return None
     path = _history_path()
     with _history_lock(path):
         messages = _load_messages()
         messages.append({"role": "user", "content": query})
-        messages.append({"role": "assistant", "content": answer})
+        assistant_message = {"id": str(uuid.uuid4()), "role": "assistant", "content": answer, "research_run_id": research_run_id}
+        messages.append(assistant_message)
         _save_messages(messages[-100:])
+        return assistant_message
 
 
 def ClearHistory() -> None:

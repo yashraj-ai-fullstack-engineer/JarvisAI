@@ -1,13 +1,13 @@
 html {
-  color-scheme: dark;
-  background: #080c12;
+  color-scheme: light;
+  background: #fbfaf8;
 }
 
 body {
   margin: 0;
   min-width: 320px;
   min-height: 100vh;
-  font-family: Inter, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  font-family: "Manrope", "Aptos", "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
   -webkit-font-smoothing: antialiased;
   text-rendering: optimizeLegibility;
 }
@@ -19,5 +19,5 @@ input {
 
 ::selection {
   color: #ffffff;
-  background: #278f58;
+  background: #5544bd;
 }

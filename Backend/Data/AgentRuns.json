@@ -1,0 +1,40 @@
+[
+  {
+    "id": "670a36cc-161d-434a-b4dc-f4715eb817dd",
+    "started_at": "2026-08-15T19:44:12.893131+00:00",
+    "completed_at": "2026-08-15T19:46:36.594424+00:00",
+    "status": "completed",
+    "workflow": "direct",
+    "domains": [],
+    "session_id": "8e584ee2-ed42-41d3-896a-66493cf72c12",
+    "user_id": "7bdbba13-d432-426c-be17-7fb484c19612",
+    "request_chars": 28,
+    "selected_tools": [
+      "research_web"
+    ],
+    "tool_calls": [
+      "research_web"
+    ],
+    "error": ""
+  },
+  {
+    "id": "a02c05c6-bc9f-4bb8-b1a2-cf0d2b1112fa",
+    "started_at": "2026-08-15T20:02:51.214985+00:00",
+    "completed_at": "2026-08-15T20:03:13.748174+00:00",
+    "status": "completed",
+    "workflow": "research",
+    "domains": [
+      "web"
+    ],
+    "session_id": "8e584ee2-ed42-41d3-896a-66493cf72c12",
+    "user_id": "7bdbba13-d432-426c-be17-7fb484c19612",
+    "request_chars": 27,
+    "selected_tools": [
+      "get_weather_and_air_quality"
+    ],
+    "tool_calls": [
+      "get_weather_and_air_quality"
+    ],
+    "error": ""
+  }
+]
