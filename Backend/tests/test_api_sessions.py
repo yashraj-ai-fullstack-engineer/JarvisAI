@@ -48,6 +48,20 @@ class BrowserSessionAPITests(unittest.TestCase):
         self.assertNotIn('"headers"', serialized)
         self.assertNotIn('"env"', serialized)
 
+    def test_feedback_put_preflight_is_allowed(self) -> None:
+        with TestClient(app) as browser:
+            response = browser.options(
+                "/api/chats/8e584ee2-ed42-41d3-896a-66493cf72c12/messages/695a7b05-bd33-4b43-b85f-aae26913a608/feedback",
+                headers={
+                    "Origin": "http://localhost:5173",
+                    "Access-Control-Request-Method": "PUT",
+                    "Access-Control-Request-Headers": "authorization,content-type",
+                },
+            )
+
+        self.assertEqual(response.status_code, 200)
+        self.assertIn("PUT", response.headers.get("access-control-allow-methods", ""))
+
 
 if __name__ == "__main__":
     unittest.main()

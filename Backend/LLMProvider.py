@@ -258,6 +258,7 @@ def lmstudio_generate(
     model: str | None = None,
     temperature: float = 0.5,
     reasoning: str | None = None,
+    max_output_tokens: int | None = None,
 ) -> str:
     _validate_local_server_url()
     selected_model = model or LMSTUDIO_MODEL
@@ -266,7 +267,9 @@ def lmstudio_generate(
         "input": prompt,
         "system_prompt": system,
         "temperature": temperature,
-        "max_output_tokens": LMSTUDIO_MAX_TOKENS,
+        # Callers such as /research can request a larger bounded completion
+        # without changing the intentionally concise normal-chat default.
+        "max_output_tokens": max_output_tokens or LMSTUDIO_MAX_TOKENS,
         "stream": False,
         "reasoning": reasoning or LMSTUDIO_REASONING,
         "store": False,
@@ -304,6 +307,7 @@ def openrouter_generate(
     model: str | None = None,
     temperature: float = 0.5,
     reasoning: str | None = None,
+    max_output_tokens: int | None = None,
 ) -> str:
     selected_model = _openrouter_model(model)
     messages = []
@@ -318,6 +322,10 @@ def openrouter_generate(
     }
     if reasoning and reasoning != "off":
         payload["reasoning"] = {"enabled": True}
+    if max_output_tokens is not None:
+        # OpenRouter documents max_completion_tokens as the current completion
+        # limit. Keeping this opt-in preserves existing normal-chat behaviour.
+        payload["max_completion_tokens"] = max_output_tokens
 
     try:
         response = requests.post(
@@ -348,20 +356,21 @@ def generate_text(
     model: str | None = None,
     temperature: float = 0.5,
     reasoning: str | None = None,
+    max_output_tokens: int | None = None,
 ) -> str:
     if LLM_PROVIDER == "openrouter":
         try:
-            return openrouter_generate(prompt, system, _openrouter_model(model), temperature, reasoning)
+            return openrouter_generate(prompt, system, _openrouter_model(model), temperature, reasoning, max_output_tokens)
         except LocalLLMUnavailable as primary_exc:
             logger.warning("OpenRouter primary unavailable, trying OpenRouter fallback: %s", primary_exc)
-            return openrouter_generate(prompt, system, OPENROUTER_FALLBACK_MODEL, temperature, reasoning)
+            return openrouter_generate(prompt, system, OPENROUTER_FALLBACK_MODEL, temperature, reasoning, max_output_tokens)
     if LLM_PROVIDER == "openrouter_lmstudio":
         try:
-            return openrouter_generate(prompt, system, _openrouter_model(model), temperature, reasoning)
+            return openrouter_generate(prompt, system, _openrouter_model(model), temperature, reasoning, max_output_tokens)
         except LocalLLMUnavailable as primary_exc:
             logger.warning("OpenRouter primary unavailable, trying OpenRouter fallback: %s", primary_exc)
             try:
-                return openrouter_generate(prompt, system, OPENROUTER_FALLBACK_MODEL, temperature, reasoning)
+                return openrouter_generate(prompt, system, OPENROUTER_FALLBACK_MODEL, temperature, reasoning, max_output_tokens)
             except LocalLLMUnavailable as openrouter_exc:
                 logger.warning("OpenRouter fallback unavailable, falling back to LM Studio: %s", openrouter_exc)
                 openrouter_error = (
@@ -369,14 +378,14 @@ def generate_text(
                     f"Fallback OpenRouter ({OPENROUTER_FALLBACK_MODEL}): {openrouter_exc}"
                 )
             try:
-                return lmstudio_generate(prompt, system, LMSTUDIO_MODEL, temperature, reasoning)
+                return lmstudio_generate(prompt, system, LMSTUDIO_MODEL, temperature, reasoning, max_output_tokens)
             except LocalLLMUnavailable as lmstudio_exc:
                 raise LocalLLMUnavailable(
                     "OpenRouter primary, OpenRouter fallback, and LM Studio fallback are unavailable. "
                     f"{openrouter_error} LM Studio: {lmstudio_exc}"
                 ) from lmstudio_exc
     if LLM_PROVIDER == "lmstudio":
-        return lmstudio_generate(prompt, system, model or LMSTUDIO_MODEL, temperature, reasoning)
+        return lmstudio_generate(prompt, system, model or LMSTUDIO_MODEL, temperature, reasoning, max_output_tokens)
     raise LocalLLMUnavailable(
         f"Unsupported LLM_PROVIDER '{LLM_PROVIDER}'. Use 'openrouter_lmstudio', 'openrouter', or 'lmstudio'."
     )

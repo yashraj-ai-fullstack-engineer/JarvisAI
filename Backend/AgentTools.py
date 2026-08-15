@@ -72,7 +72,9 @@ def _emit_status(message: str, stage: str, detail: str) -> None:
     """Send safe progress metadata when running inside a LangGraph stream."""
     try:
         writer = get_stream_writer()
-    except RuntimeError:
+    # LangGraph raises RuntimeError in some versions and KeyError in others
+    # when a tool is safely reused outside a graph (for example by /research).
+    except (RuntimeError, KeyError):
         return
     writer({
         "type": "status",
@@ -85,7 +87,7 @@ def _emit_status(message: str, stage: str, detail: str) -> None:
 def _emit_custom_event(payload: dict[str, object]) -> None:
     try:
         writer = get_stream_writer()
-    except RuntimeError:
+    except (RuntimeError, KeyError):
         return
     writer(payload)
 

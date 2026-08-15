@@ -38,6 +38,16 @@ class PromptWindowTests(unittest.TestCase):
         }
         self.assertIn("not available", _plan_validation_error(plan, ["gmail_search_messages"]))
 
+    def test_plan_validation_does_not_accept_tool_aliases(self) -> None:
+        plan = {
+            "intent": "research",
+            "needs_tools": True,
+            "tool_names": ["web_search"],
+            "workflow": ["research"],
+            "max_tool_calls": 1,
+        }
+        self.assertIn("not available", _plan_validation_error(plan, ["research_web"]))
+
 
 if __name__ == "__main__":
     unittest.main()

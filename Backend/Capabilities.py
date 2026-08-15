@@ -312,6 +312,18 @@ def capability_snapshot(mcp_snapshot: dict[str, Any] | None = None) -> dict[str,
     return {
         "local": local,
         "google": google,
+        "plugins": [
+            {
+                "id": str(server.get("name") or ""),
+                "label": str(server.get("label") or server.get("name") or "Connected app"),
+                "description": str(server.get("description") or ""),
+                "connected": bool(server.get("oauth_connected", True)),
+                "available": bool(server.get("ready")),
+                "read_only": bool(server.get("read_only")),
+            }
+            for server in mcp_snapshot.get("servers", [])
+            if isinstance(server, dict) and str(server.get("name") or "") not in GOOGLE_CAPABILITIES
+        ],
         "mcp_runtime": dict(mcp_snapshot.get("runtime") or {}),
     }
 
@@ -341,6 +353,11 @@ def capability_prompt(
         else:
             state = "not connected"
         lines.append(f"- {service['label']}: {state}. {service['description']}")
+    for plugin in snapshot["plugins"]:
+        state = "connected and ready" if plugin["available"] else "not connected or unavailable"
+        lines.append(
+            f"- Connected plugin {plugin['label']}: {state}. {plugin['description']}"
+        )
     if tool_names:
         lines.append(f"- Tools exposed for this request: {', '.join(tool_names)}.")
     lines.append(

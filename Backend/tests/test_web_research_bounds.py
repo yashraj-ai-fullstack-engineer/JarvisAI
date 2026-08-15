@@ -4,7 +4,7 @@ from Backend.AgentTools import AGENT_TOOLS
 from Backend.JarvisAgent import _normalize_web_plan, _web_tool_limit_reached
 
 
-def test_normal_web_answer_uses_bounded_research_tool():
+def test_planner_tool_selection_is_not_rewritten():
     plan = {
         "tool_names": ["search_web", "read_webpage"],
         "workflow": ["Search repeatedly", "Read pages"],
@@ -13,9 +13,7 @@ def test_normal_web_answer_uses_bounded_research_tool():
 
     normalized = _normalize_web_plan(plan, AGENT_TOOLS)
 
-    assert normalized["tool_names"] == ["research_web"]
-    assert normalized["max_tool_calls"] == 1
-    assert "bounded web research" in normalized["workflow"][0]
+    assert normalized == plan
 
 
 def test_explicit_open_website_flow_keeps_search_web():
