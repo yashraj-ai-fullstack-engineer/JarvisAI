@@ -505,7 +505,7 @@ def sync_owner_profile(force: bool = False) -> dict[str, Any]:
 
     source_sha256 = _source_sha256()
     current = _supabase_get_current_document()
-    embedding_model = get_config("PDF_EMBEDDING_MODEL", PDF_EMBEDDING_MODEL)
+    embedding_model = PDF_EMBEDDING_MODEL
     if (
         not force
         and current
@@ -600,7 +600,7 @@ def _retrieve_supabase_context(question: str, top_k: int) -> dict[str, Any]:
         raise OwnerRAGError("Supabase owner-profile retrieval returned no resume chunks.")
     return {
         "source": RESUME_PATH.name,
-        "embedding_model": get_config("PDF_EMBEDDING_MODEL", PDF_EMBEDDING_MODEL),
+        "embedding_model": PDF_EMBEDDING_MODEL,
         "retrieval_mode": "supabase_vector",
         "matches": [
             {
