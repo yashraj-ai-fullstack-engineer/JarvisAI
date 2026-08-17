@@ -11,6 +11,7 @@ Backend/Data/GoogleOAuthStates.json
 Backend/Data/PendingEmails.json
 Backend/Data/PendingMCPActions.json
 Backend/Data/Sessions/
+Backend/Logs
 Backend/Data/OwnerRAG/
 Backend/Data/speech.mp3
 Backend/Data/*.txt

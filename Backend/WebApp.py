@@ -750,8 +750,8 @@ async def chat_live_socket(session_id: str, websocket: WebSocket) -> None:
             if not content or len(content) > 10_000:
                 await websocket.send_text(json.dumps({"type": "error", "message": "Message must be between 1 and 10,000 characters."}))
                 continue
-            if re.match(r"^@agent\b", content, re.IGNORECASE):
-                await websocket.send_text(json.dumps({"type": "error", "message": "Send @Agent requests through the agent channel."}))
+            if re.match(r"^@nexa\b", content, re.IGNORECASE):
+                await websocket.send_text(json.dumps({"type": "error", "message": "Send @Nexa requests through the agent channel."}))
                 continue
             reply_to = reply_snapshot(session_id, user["id"], str(payload.get("reply_to_id") or ""))
             saved = save_message(session_id, "user", content, user["id"], user["name"], reply_to=reply_to)
@@ -960,9 +960,10 @@ async def ask_pdf_api(
             detail=f"PDF is too large. The current limit is {MAX_PDF_BYTES // (1024 * 1024)} MB.",
         )
 
-    remember_prefix = "remember:"
-    is_remembered = question.strip().lower().startswith(remember_prefix)
-    document_question = question.strip()[len(remember_prefix):].strip() if is_remembered else question.strip()
+    raw_pdf_question = question.strip()
+    remember_match = re.match(r"^/remember(?:\s|$)", raw_pdf_question, re.IGNORECASE)
+    is_remembered = bool(remember_match)
+    document_question = raw_pdf_question[remember_match.end():].strip() if remember_match else raw_pdf_question
     # A filename is rendered separately in the chat UI. Discard an old client
     # side Document: suffix if it was accidentally included in the request.
     document_question = document_question.split("\n\nDocument:", 1)[0].strip()
@@ -988,7 +989,7 @@ async def ask_pdf_api(
     except LocalLLMUnavailable as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
-    history_query = f"{'Remember: ' if is_remembered else ''}{document_question}\n\nDocument: {filename}"
+    history_query = f"{'/remember ' if is_remembered else ''}{document_question}\n\nDocument: {filename}"
     with _chat_lock(request):
         with chat_session_context(session_id):
             SaveExchange(history_query, str(result.get("answer") or ""))
@@ -1000,11 +1001,11 @@ async def ask_pdf_api(
 async def query_saved_documents_api(payload: SavedDocumentQueryRequest, request: Request) -> PDFAnswerResponse:
     user = _require_chat_session(request, payload.session_id)
     raw_question = payload.question.strip()
-    if not raw_question.lower().startswith("doc:"):
-        raise HTTPException(status_code=422, detail="Start a saved-document search with Doc:.")
-    question = raw_question[4:].strip()
+    if not re.match(r"^/doc(?:\s|$)", raw_question, re.IGNORECASE):
+        raise HTTPException(status_code=422, detail="Start a saved-document search with /doc.")
+    question = re.sub(r"^/doc(?:\s|$)", "", raw_question, count=1, flags=re.IGNORECASE).strip()
     if not question:
-        raise HTTPException(status_code=422, detail="Write a question after Doc:.")
+        raise HTTPException(status_code=422, detail="Write a question after /doc.")
     try:
         result = await run_in_threadpool(
             answer_saved_document_question,
@@ -1019,7 +1020,7 @@ async def query_saved_documents_api(payload: SavedDocumentQueryRequest, request:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     with _chat_lock(request):
         with chat_session_context(payload.session_id):
-            SaveExchange(f"Doc: {question}", str(result.get("answer") or ""))
+            SaveExchange(f"/doc {question}", str(result.get("answer") or ""))
     await live_sessions.broadcast(payload.session_id, {"type": "refresh"})
     return PDFAnswerResponse(**result)
 
@@ -1080,13 +1081,13 @@ async def chat_stream(request: ChatRequest, http_request: Request):
     if not message:
         raise HTTPException(status_code=422, detail="Message cannot be empty.")
     user = _require_chat_session(http_request, request.session_id)
-    trigger = re.match(r"^@agent\b[\s,:-]*(.*)$", message, re.IGNORECASE | re.DOTALL)
+    trigger = re.match(r"^@nexa\b[\s,:-]*(.*)$", message, re.IGNORECASE | re.DOTALL)
     try:
         shared_session = active_participant_count(request.session_id) > 1
     except StoreUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
     if shared_session and (not trigger or not trigger.group(1).strip()):
-        raise HTTPException(status_code=422, detail="Start an AI request with @Agent.")
+        raise HTTPException(status_code=422, detail="Start an AI request with @Nexa.")
     if trigger:
         message = trigger.group(1).strip()
     if not message:

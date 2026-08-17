@@ -732,11 +732,11 @@ def get_power_and_wifi_status() -> str:
 
 @tool
 def answer_owner_profile(question: str) -> str:
-    """Answer owner/creator questions using RAG over Resume_Yashraj.pdf."""
+    """Answer owner, master, creator, or Yashraj questions from the private resume store."""
     _emit_status(
         "Searching the owner profile",
         "RAG",
-        "Embedding the question and retrieving the closest resume chunks.",
+        "Retrieving the closest resume chunks from the private owner-profile knowledge base.",
     )
     try:
         result = answer_owner_question(question)

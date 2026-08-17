@@ -21,6 +21,7 @@ from pydantic import BaseModel, Field
 from Backend.Chatbot import LoadHistory
 from Backend.GoogleOAuth import google_mcp_connected
 from Backend.MongoStore import current_chat_session_id, current_chat_user_id
+from Backend.OwnerRAG import is_owner_question
 from Backend.Paths import DATA_DIR
 
 
@@ -115,7 +116,7 @@ def route_request(query: str, connected_plugin_domains: Iterable[str] = ()) -> R
         phrase = normalized_domain.replace("_", " ")
         if phrase and re.search(rf"\b{re.escape(phrase)}\b", text):
             domains.append(normalized_domain)
-    if re.search(r"\b(?:owner|creator|developer|resume|yashraj)\b", text):
+    if is_owner_question(text):
         return RouteDecision(
             workflow=Workflow.KNOWLEDGE,
             domains=["owner_profile"],

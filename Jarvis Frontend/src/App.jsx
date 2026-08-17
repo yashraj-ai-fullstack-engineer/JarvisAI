@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import { Check, CircleHelp, Command, Copy, Crown, FileText, History, Link2, Moon, Plus, Reply, Search, SendHorizontal, Share2, Sparkles, Sun, ThumbsDown, ThumbsUp, Trash2, UserMinus, Users, X } from 'lucide-react'
+import { Check, CircleHelp, Command, Copy, Crown, FileText, Link2, Menu, Moon, Plus, Reply, Search, SendHorizontal, Share2, Sparkles, Sun, ThumbsDown, ThumbsUp, Trash2, UserMinus, Users, X } from 'lucide-react'
 import Particles, { ParticlesProvider } from '@tsparticles/react'
 import { loadSlim } from '@tsparticles/slim'
 import MarkdownResponse from './components/MarkdownResponse.jsx'
@@ -36,8 +36,9 @@ const THEME_KEY = 'nexa.theme'
 const LOCATION_CACHE_PREFIX = 'nexa.location.'
 const LOCATION_CACHE_TTL = 1000 * 60 * 30
 const MAX_DOCUMENT_BYTES = 5 * 1024 * 1024
-const AGENT_PREFIX_PATTERN = /^@agent(?:\b|$)[\s,:-]*/i
-const AGENT_PARTIAL_PATTERN = /^@a(?:g(?:e(?:n(?:t?)?)?)?)?$/i
+const AGENT_PREFIX_PATTERN = /^@nexa(?:\b|$)[\s,:-]*/i
+const AGENT_DRAFT_PATTERN = /^@(?:n(?:e(?:x(?:a)?)?)?)(?:\b|$)[\s,:-]*/i
+const AGENT_PARTIAL_PATTERN = /^@(?:n(?:e(?:x(?:a)?)?)?)?$/i
 const RESEARCH_COMMAND_PATTERN = /^\/research(?:\s|$)/i
 const GOOGLE_SERVICE_DEFAULTS = [
   { service: 'gmail', label: 'Gmail', configured: true, connected: false, email: '' },
@@ -169,6 +170,10 @@ function hasAgentMention(value = '') {
 
 function stripAgentMention(value = '') {
   return String(value).trimStart().replace(AGENT_PREFIX_PATTERN, '')
+}
+
+function stripAgentDraftMention(value = '') {
+  return String(value).trimStart().replace(AGENT_DRAFT_PATTERN, '')
 }
 
 function startOfLocalDay(date) {
@@ -466,7 +471,7 @@ const AnswerCards = memo(function AnswerCards({ message, sessionId }) {
   const [isOpeningPdf, setIsOpeningPdf] = useState(false)
   const [pdfOpenError, setPdfOpenError] = useState('')
 
-  if (!tables.length && !chart && !reportSections.length && !pdfCitations.length) return null
+  if (!tables.length && !chart && !reportSections.length && !pdfCitations.length && !researchPdfUrl) return null
 
   const copyTable = async (table, key) => {
     try {
@@ -502,8 +507,8 @@ const AnswerCards = memo(function AnswerCards({ message, sessionId }) {
         pdfTab.location.replace(blobUrl)
         window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000)
       } else {
-        URL.revokeObjectURL(blobUrl)
-        throw new Error('Your browser blocked the PDF tab. Allow pop-ups for Nexa and try again.')
+        window.location.assign(blobUrl)
+        window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000)
       }
     } catch (error) {
       if (pdfTab && !pdfTab.closed) pdfTab.close()
@@ -515,6 +520,25 @@ const AnswerCards = memo(function AnswerCards({ message, sessionId }) {
 
   return (
     <div className="answer-card-stack">
+      {researchPdfUrl && (
+        <section className="answer-card report-export-card">
+          <div className="answer-card-head">
+            <div>
+              <span>RESEARCH EXPORT</span>
+              <strong>Full PDF report</strong>
+            </div>
+            <button className="report-pdf-link" type="button" onClick={openResearchPdf} disabled={isOpeningPdf}>
+              <span className="report-pdf-mark" aria-hidden="true"><img src="/pdf.png" alt="" /></span>
+              <span className="report-pdf-copy">
+                <p>{isOpeningPdf ? 'Preparing PDF...' : 'Open PDF'}</p>
+                <small>{isOpeningPdf ? 'Creating report' : 'View or download'}</small>
+              </span>
+            </button>
+          </div>
+          {pdfOpenError && <p className="report-pdf-error" role="alert">{pdfOpenError}</p>}
+        </section>
+      )}
+
       {pdfCitations.length > 0 && (
         <section className="answer-card citation-card">
           <div className="answer-card-head">
@@ -601,15 +625,6 @@ const AnswerCards = memo(function AnswerCards({ message, sessionId }) {
               <span>REPORT VIEW</span>
               <strong>Section navigator</strong>
             </div>
-            {researchPdfUrl && (
-              <button className="report-pdf-link" type="button" onClick={openResearchPdf} disabled={isOpeningPdf}>
-                <span className="report-pdf-mark" aria-hidden="true"><img src="/pdf.png" alt="" /></span>
-                <span className="report-pdf-copy">
-                  <p>{isOpeningPdf ? 'Preparing PDF…' : 'Export PDF'}</p>
-                  {/* <small>{isOpeningPdf ? 'Creating your report' : 'Open full report'}</small> */}
-                </span>
-              </button>
-            )}
           </div>
           <div className="report-tabs" role="tablist" aria-label="Report sections">
             {reportSections.map((section, index) => (
@@ -626,7 +641,6 @@ const AnswerCards = memo(function AnswerCards({ message, sessionId }) {
           <div className="report-panel">
             <MarkdownResponse>{reportSections[activeReportTab]?.content || ''}</MarkdownResponse>
           </div>
-          {pdfOpenError && <p className="report-pdf-error" role="alert">{pdfOpenError}</p>}
         </section>
       )}
     </div>
@@ -853,6 +867,7 @@ function App() {
   const [replyTarget, setReplyTarget] = useState(null)
   const [composerHelpOpen, setComposerHelpOpen] = useState(false)
   const [visibleMessageDay, setVisibleMessageDay] = useState('')
+  const [isConversationScrolled, setIsConversationScrolled] = useState(false)
   const [browserLocation, setBrowserLocation] = useState(() => ({
     status: 'idle',
     location: null,
@@ -1119,10 +1134,15 @@ function App() {
     const scheduleVisibleDayUpdate = () => {
       const distanceFromBottom = feed.scrollHeight - feed.scrollTop - feed.clientHeight
       shouldStickToBottomRef.current = distanceFromBottom < 96
+      setIsConversationScrolled((current) => {
+        const next = feed.scrollTop > 8
+        return current === next ? current : next
+      })
       if (!updateFrame) updateFrame = window.requestAnimationFrame(updateVisibleDay)
     }
 
     updateVisibleDay()
+    scheduleVisibleDayUpdate()
     feed.addEventListener('scroll', scheduleVisibleDayUpdate, { passive: true })
     window.addEventListener('resize', scheduleVisibleDayUpdate)
     return () => {
@@ -1162,8 +1182,8 @@ function App() {
 
   const activateAgentMention = useCallback(() => {
     setInput((current) => {
-      const remainder = stripAgentMention(current)
-      return remainder ? `@Agent ${remainder}` : '@Agent '
+      const remainder = stripAgentDraftMention(current)
+      return remainder ? `@Nexa ${remainder}` : '@Nexa '
     })
     window.requestAnimationFrame(() => composerInputRef.current?.focus())
   }, [])
@@ -1538,20 +1558,20 @@ function App() {
     const attachedPdf = pdfFile
     const selectedReply = replyTarget
     const sharedSession = Boolean(chatSessions.find((session) => session.id === activeSessionId)?.shared)
-    const agentMatch = /^@agent\b[\s,:-]*(.+)$/is.exec(cleanMessage)
+    const agentMatch = /^@nexa\b[\s,:-]*(.*)$/is.exec(cleanMessage)
     const usesAgent = !sharedSession || Boolean(agentMatch)
     const agentPrompt = agentMatch ? agentMatch[1].trim() : cleanMessage
     const researchMode = RESEARCH_COMMAND_PATTERN.test(agentPrompt)
     if (agentMatch && !agentPrompt) {
-      setApiError('Add a prompt after @Agent.')
+      setApiError('Add a prompt after @Nexa.')
       return
     }
     if (researchMode && !/^\/research\s+\S/i.test(agentPrompt)) {
       setApiError('Write a research question after /research.')
       return
     }
-    if ((attachedPdf || /^doc:\s*/i.test(agentPrompt)) && !usesAgent) {
-      setApiError('Start AI and document requests with @Agent in shared sessions.')
+    if ((attachedPdf || /^\/doc(?:\s|$)/i.test(agentPrompt)) && !usesAgent) {
+      setApiError('Start AI and document requests with @Nexa in shared sessions.')
       return
     }
     if (attachedPdf && researchMode) {
@@ -1564,7 +1584,7 @@ function App() {
       {
         id: Date.now(),
         role: 'user',
-        text: cleanMessage,
+        text: usesAgent ? agentPrompt : cleanMessage,
         ...(attachedPdf ? { documentName: attachedPdf.name } : {}),
         ...(selectedReply ? { replyTo: selectedReply } : {}),
         time: formatMessageTime(createdAt),
@@ -1680,7 +1700,7 @@ function App() {
         return
       }
 
-      if (/^doc:\s*/i.test(agentPrompt)) {
+      if (/^\/doc(?:\s|$)/i.test(agentPrompt)) {
         const response = await apiFetch(`${API_BASE}/api/documents/query`, {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -2164,13 +2184,22 @@ function App() {
         </div>
       </header>
 
-      <div className="mobile-drawer-actions" aria-label="Mobile panels">
-        <button type="button" onClick={() => setLeftPanelOpen(true)} aria-label="Open chat sessions"><History size={18} /><span>Chats</span></button>
+      <div className={`mobile-drawer-actions ${leftPanelOpen ? 'drawer-open' : ''}`} aria-label="Mobile panels">
+        <button
+          type="button"
+          className={leftPanelOpen ? 'active' : ''}
+          onClick={() => setLeftPanelOpen((open) => !open)}
+          aria-label={leftPanelOpen ? 'Close chat sessions' : 'Open chat sessions'}
+          aria-expanded={leftPanelOpen}
+        >
+          {leftPanelOpen ? <X size={20} /> : <Menu size={20} />}
+          <span>Chats</span>
+        </button>
       </div>
 
-      {leftPanelOpen && <button className="mobile-panel-scrim" type="button" aria-label="Close side panels" onClick={() => setLeftPanelOpen(false)} />}
-
       <section className="command-layout">
+        {leftPanelOpen && <button className="mobile-panel-scrim" type="button" aria-label="Close side panels" onClick={() => setLeftPanelOpen(false)} />}
+
         <aside className={`command-sidebar chat-sidebar ${leftPanelOpen ? 'mobile-open' : ''}`}>
           <AmbientParticles id="nexa-particles-sidebar-left" className="sidebar-particles" compact />
           <button className="mobile-drawer-close" type="button" onClick={() => setLeftPanelOpen(false)} aria-label="Close chat sessions"><X size={18} /></button>
@@ -2255,10 +2284,10 @@ function App() {
           </div>
         </aside>
 
-        <section className={`chat-stage ${showingJoinedInviteConfirmation ? 'invite-confirmation' : ''}`} aria-label="Nexa conversation">
+        <section className={`chat-stage ${showingJoinedInviteConfirmation ? 'invite-confirmation' : ''} ${isConversationScrolled ? 'conversation-scrolled' : ''}`} aria-label="Nexa conversation">
 
           {user && activeSessionId && (
-            <div className="session-collaboration-bar">
+            <div className={`session-collaboration-bar ${isConversationScrolled ? 'is-translucent' : ''}`}>
               <div>
                 <span className="section-label">{activeSession?.shared ? 'SHARED' : 'PRIVATE'}</span>
                 <strong>{activeSession?.title || 'New chat'}</strong>
@@ -2382,8 +2411,6 @@ function App() {
                 )}
                 <div className="message-content">
                   <div className="message-meta">
-                    <strong>{messageAuthorLabel(message)}</strong>
-                    <span>{message.time}</span>
                     <button
                       className="message-reply-button"
                       type="button"
@@ -2393,6 +2420,8 @@ function App() {
                     >
                       <Reply size={13} />
                     </button>
+                    <strong>{messageAuthorLabel(message)}</strong>
+                    <span>{message.time}</span>
                   </div>
                   {message.replyTo && (
                     <div className="message-reply-quote">
@@ -2612,7 +2641,7 @@ function App() {
                 <span className="pdf-file-icon" aria-hidden="true" />
                 <div>
                   <strong>{pdfFile.name}</strong>
-                  <small>Use Remember: in prompt to save it; normal uploads are used once and never stored</small>
+                  <small>Use /remember in prompt to save it; normal uploads are used once and never stored</small>
                 </div>
                 <button
                   type="button"
@@ -2639,7 +2668,11 @@ function App() {
               </div>
             )}
 
-            <div className="composer-workspace-hint"><span>✦</span> Nexa can search across your connected workspace <small>⌘</small></div>
+            <div className="composer-workspace-hint">
+              <Sparkles size={12} aria-hidden="true" />
+              <span>Nexa can search across your connected workspace</span>
+              <Command size={13} aria-hidden="true" />
+            </div>
             <form className={`text-composer ${agentMode ? 'agent-mode' : ''}`} onSubmit={(event) => { event.preventDefault(); sendMessage() }}>
               <input
                 ref={pdfInputRef}
@@ -2666,16 +2699,18 @@ function App() {
                     type="button"
                     onClick={clearAgentMention}
                     title="Remove agent mention"
-                  aria-label="Remove agent mention"
-                >
-                  <Logo />
-                </button>
-              )}
+                    aria-label="Remove agent mention"
+                  >
+                    <Logo />
+                    <span>Nexa</span>
+                    <X size={12} aria-hidden="true" />
+                  </button>
+                )}
                 <input
                   ref={composerInputRef}
                   value={composerValue}
                   onChange={(event) => {
-                    setInput(agentMode ? `@Agent ${event.target.value}` : event.target.value)
+                    setInput(agentMode ? `@Nexa ${event.target.value}` : event.target.value)
                     announceTyping(Boolean(event.target.value.trim()))
                   }}
                   onKeyDown={(event) => {
@@ -2687,7 +2722,7 @@ function App() {
                       clearAgentMention()
                     }
                   }}
-                  placeholder={agentMode ? 'Ask Nexa to handle this...' : pdfFile ? 'Ask about the attached PDF' : sharedSessionActive ? 'Message members or start with @Agent' : 'Message Nexa'}
+                  placeholder={agentMode ? 'Ask Nexa to handle this...' : pdfFile ? 'Ask about the attached PDF' : sharedSessionActive ? 'Message members or start with @Nexa' : 'Message Nexa'}
                   aria-label="Message Nexa"
                 />
                 {agentSuggestionVisible && (
@@ -2699,12 +2734,12 @@ function App() {
                   >
                     <span className="agent-mention-suggestion-logo"><Logo /></span>
                     <span className="agent-mention-suggestion-copy">
-                      <strong>@Convo with Nexa</strong>
-                      {/* <small>Ask Nexa to handle this message</small> */}
+                      <strong>@Nexa</strong>
+                      <small>Ask Nexa to respond in this shared chat</small>
                     </span>
                   </button>
                 )}
-                <small>{agentMode ? 'Nexa agent will respond to this request' : pdfFile ? 'Prefix with Remember: to save this document permanently' : sharedSessionActive ? 'Messages go to session members. Use @Agent to call Nexa.' : 'Nexa will respond in this private session.'}</small>
+                <small>{agentMode ? 'Nexa will respond to this request' : pdfFile ? 'Prefix with /remember to save this document permanently' : sharedSessionActive ? 'Messages go to session members. Use @Nexa to call Nexa.' : 'Nexa will respond in this private session.'}</small>
               </label>
               <div className="composer-help-shell" ref={composerHelpRef}>
                 <button
@@ -2724,8 +2759,8 @@ function App() {
                       <strong>Chat commands</strong>
                     </div>
                     <div className="composer-help-list">
-                      <button type="button" onClick={() => insertComposerCommand('@Agent ')}>
-                        <code>@Agent</code>
+                      <button type="button" onClick={() => insertComposerCommand('@Nexa ')}>
+                        <code>@Nexa</code>
                         <span>Call Nexa in chats with multiple members.</span>
                       </button>
                       {!sharedSessionActive && (
@@ -2734,15 +2769,15 @@ function App() {
                           <span>This session sends every message to Nexa automatically.</span>
                         </div>
                       )}
-                      <button type="button" onClick={() => insertComposerCommand(sharedSessionActive ? '@Agent Remember: ' : 'Remember: ')}>
-                        <code>Remember:</code>
+                      <button type="button" onClick={() => insertComposerCommand(sharedSessionActive ? '@Nexa /remember ' : '/remember ')}>
+                        <code>/remember</code>
                         <span>Save an attached PDF into your document memory.</span>
                       </button>
-                      <button type="button" onClick={() => insertComposerCommand(sharedSessionActive ? '@Agent Doc: ' : 'Doc: ')}>
-                        <code>Doc:</code>
+                      <button type="button" onClick={() => insertComposerCommand(sharedSessionActive ? '@Nexa /doc ' : '/doc ')}>
+                        <code>/doc</code>
                         <span>Search your saved documents and answer from them.</span>
                       </button>
-                      <button type="button" onClick={() => insertComposerCommand(sharedSessionActive ? '@Agent /research ' : '/research ')}>
+                      <button type="button" onClick={() => insertComposerCommand(sharedSessionActive ? '@Nexa /research ' : '/research ')}>
                         <code>/research</code>
                         <span>Run a cited deep-research report using relevant public sources.</span>
                       </button>
