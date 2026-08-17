@@ -24,14 +24,14 @@ from Backend.LLMProvider import (
 )
 
 
-MAX_PDF_PAGES = int(get_config("PDF_MAX_PAGES", "2"))
-MAX_PDF_BYTES = int(get_config("PDF_MAX_BYTES", str(8 * 1024 * 1024)))
-CHUNK_MAX_CHARS = int(get_config("PDF_CHUNK_MAX_CHARS", "1200"))
-CHUNK_OVERLAP_WORDS = int(get_config("PDF_CHUNK_OVERLAP_WORDS", "45"))
-RETRIEVAL_TOP_K = int(get_config("PDF_RETRIEVAL_TOP_K", "8"))
-PDF_EMBEDDING_MODEL = get_config("PDF_EMBEDDING_MODEL", "nvidia/nemotron-3-embed-1b:free")
-PDF_EMBEDDING_DIMENSIONS = int(get_config("PDF_EMBEDDING_DIMENSIONS", "2048"))
-PDF_EMBEDDING_TIMEOUT_SECONDS = int(get_config("PDF_EMBEDDING_TIMEOUT_SECONDS", "60"))
+MAX_PDF_PAGES = 30
+MAX_PDF_BYTES = 5 * 1024 * 1024
+CHUNK_MAX_CHARS = 1200
+CHUNK_OVERLAP_WORDS = 45
+RETRIEVAL_TOP_K = 8
+PDF_EMBEDDING_MODEL = "nvidia/nemotron-3-embed-1b:free"
+PDF_EMBEDDING_DIMENSIONS = 2048
+PDF_EMBEDDING_TIMEOUT_SECONDS = 60
 
 SUPABASE_URL = get_config("SUPABASE_URL", "").rstrip("/")
 SUPABASE_SERVICE_ROLE_KEY = get_config("SUPABASE_SERVICE_ROLE_KEY", "")
@@ -282,7 +282,7 @@ def embed_pdf_texts(texts: list[str]) -> list[list[float]]:
         headers["X-Title"] = title
 
     payload = {
-        "model": get_config("PDF_EMBEDDING_MODEL", PDF_EMBEDDING_MODEL),
+        "model": PDF_EMBEDDING_MODEL,
         "input": texts,
         "encoding_format": "float",
     }
@@ -354,7 +354,7 @@ def create_supabase_document(
         "filename": filename[:240] or "document.pdf",
         "file_sha256": hashlib.sha256(pdf_bytes).hexdigest(),
         "page_count": page_count,
-        "embedding_model": get_config("PDF_EMBEDDING_MODEL", PDF_EMBEDDING_MODEL),
+        "embedding_model": PDF_EMBEDDING_MODEL,
     }
     response = requests.post(
         f"{supabase_url()}/rest/v1/pdf_documents",
