@@ -16,10 +16,10 @@ const starterMessages = [
 ]
 
 const suggestions = [
-  { label: 'Research Tesla stock', icon: Search },
-  { label: 'Find restaurants near me', icon: Sparkles },
-  { label: 'Summarize a PDF document', icon: FileText },
-  { label: 'Send an email', icon: Command },
+  { label: 'Compare ChatGPT, Gemini, and Claude.', icon: Search },
+  { label: 'What do you know about me?', icon: Sparkles },
+  { label: 'What are the good restaurants near me?', icon: FileText },
+  { label: 'How is the weather at my place?', icon: Command },
 ]
 
 const shareHistoryOptions = [
@@ -1079,8 +1079,31 @@ function App() {
     }
   }, [activeSessionId, chatSessions, createChatSession, deletingSessionId, openChatSession])
 
-  const activeSessionIsEmpty = Boolean(activeSessionId) && messages.length === 1 && messages[0]?.id === 1
+  const activeSessionHasMessages = messages.some((message) => (
+    message.role !== 'system' && String(message.id) !== '1'
+  ))
+  const activeSessionIsEmpty = Boolean(activeSessionId) && !activeSessionHasMessages
   const activeSessionIsShared = Boolean(chatSessions.find((session) => session.id === activeSessionId)?.shared)
+  const openOrCreateDraftSession = useCallback(async () => {
+    if (!user) {
+      setAuthView(true)
+      return
+    }
+    setApiError('')
+    setJoinedInviteSessionId('')
+    const existingDraft = chatSessions.find((session) => (
+      session.id !== activeSessionId
+      && !session.shared
+      && session.title === 'New chat'
+    ))
+    if (existingDraft) {
+      await openChatSession(existingDraft.id)
+      setLeftPanelOpen(false)
+      return
+    }
+    await createChatSession()
+    setLeftPanelOpen(false)
+  }, [activeSessionId, chatSessions, createChatSession, openChatSession, user])
   const messageAuthorLabel = useCallback((message) => (
     message?.role === 'assistant'
       ? 'Nexa'
@@ -2152,8 +2175,8 @@ function App() {
         <a className="brand" href="/" aria-label="Nexa home">
           <span className="brand-emblem"><Logo /></span>
           <span className="brand-copy">
-            <strong>nexa</strong>
-            <small>your workspace, understood</small>
+            <strong>Nexa</strong>
+
           </span>
         </a>
 
@@ -2204,7 +2227,7 @@ function App() {
           <AmbientParticles id="nexa-particles-sidebar-left" className="sidebar-particles" compact />
           <button className="mobile-drawer-close" type="button" onClick={() => setLeftPanelOpen(false)} aria-label="Close chat sessions"><X size={18} /></button>
           <div className="chat-sidebar-content">
-            <button className="new-chat-button" type="button" disabled={activeSessionIsEmpty} onClick={() => user ? createChatSession().catch((error) => setApiError(error.message)) : setAuthView(true)}><Plus size={17} /> New chat <span>⌘ K</span></button>
+            <button className="new-chat-button" type="button" disabled={activeSessionIsEmpty} onClick={() => openOrCreateDraftSession().catch((error) => setApiError(error.message))}><Plus size={17} /> New chat <span>⌘ K</span></button>
             <div className="chat-list-heading"><p className="section-label">CONVERSATIONS</p><button type="button" aria-label="Search chats"><Search size={15} /></button></div>
             <div className="chat-session-list">
               {chatSessions.map((session) => (
@@ -2232,8 +2255,8 @@ function App() {
             </div>
             <section className="connected-tools-mini" aria-label="Connected tools">
               <div className="connected-tools-mini-head">
-                <p className="section-label">CONNECTED TOOLS</p>
-                <span aria-hidden="true">⌘</span>
+                <p className="section-label">Available Plugins</p>
+       
               </div>
               {mergeGoogleServices(googleServices).map((service) => {
                 const isBusy = googleActionBusy === service.service || service.connecting
@@ -2387,9 +2410,9 @@ function App() {
               </article>
             ) : activeSessionIsEmpty && <section className="empty-chat-hero">
               <div className="hero-orbit"><span /><Sparkles size={28} /></div>
-              <p className="section-label">NEXA / INTELLIGENCE LAYER</p>
-              <h2>What are we creating today?</h2>
-              <p>Research, create, plan, and get things done with your personal AI workspace.</p>
+              {/* <p className="section-label">NEXA WORKSPACE</p> */}
+              <h2>Nexa - Shared AI.</h2>
+              <p>Ask Nexa to research, compare, summarize, draft, or plan. Pick a starter below or type your own. Add people you like to share knowledge.</p>
               <div className="hero-pills" aria-label="Sample prompts">
                 {suggestions.map(({ label, icon: Icon }) => (
                   <button key={label} type="button" onClick={() => sendMessage(label)} disabled={isThinking}>
@@ -2803,6 +2826,14 @@ function App() {
                 <SendHorizontal size={18} strokeWidth={2.35} aria-hidden="true" />
               </button>
             </form>
+            <div className="creator-links" aria-label="Creator links">
+              <a className="creator-link-text" href="https://www.linkedin.com/in/yashraj-gupta-ai-fullstack-engineer/" target="_blank" rel="noreferrer">Know about creator</a>
+              <a href="https://www.linkedin.com/in/yashraj-gupta-ai-fullstack-engineer/" target="_blank" rel="noreferrer" aria-label="Creator LinkedIn"><img src="/linkedin.png" alt="" /></a>
+              <a href="https://leetcode.com/u/yashraj-ai-fullstack-engineer/" target="_blank" rel="noreferrer" aria-label="Creator LeetCode"><img src="/leetcode.png" alt="" /></a>
+              <a href="https://blog-ai-3m6a.vercel.app/" target="_blank" rel="noreferrer" aria-label="Creator blog"><img src="/blog.png" alt="" /></a>
+              <a href="https://github.com/yashraj-ai-fullstack-engineer" target="_blank" rel="noreferrer" aria-label="Creator GitHub"><img src="/github.png" alt="" /></a>
+              <a href="mailto:yashrajgupta306@gmail.com" aria-label="Email creator"><img src="/gmail.png" alt="" /></a>
+            </div>
 
           </footer>
         </section>
