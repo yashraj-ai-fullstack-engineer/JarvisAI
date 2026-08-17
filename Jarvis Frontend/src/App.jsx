@@ -471,7 +471,7 @@ const AnswerCards = memo(function AnswerCards({ message, sessionId }) {
     : ''
   const [activeReportTab, setActiveReportTab] = useState(0)
   const [copiedTable, setCopiedTable] = useState('')
-  const [isOpeningPdf, setIsOpeningPdf] = useState(false)
+  const [isDownloadingPdf, setIsDownloadingPdf] = useState(false)
   const [pdfOpenError, setPdfOpenError] = useState('')
 
   if (!tables.length && !chart && !reportSections.length && !pdfCitations.length && !researchPdfUrl) return null
@@ -486,16 +486,9 @@ const AnswerCards = memo(function AnswerCards({ message, sessionId }) {
     }
   }
 
-  const openResearchPdf = async () => {
-    if (!researchPdfUrl || isOpeningPdf) return
-    // Open synchronously in the click event so browser popup protection does
-    // not block the PDF tab while the authenticated request is in flight.
-    const pdfTab = window.open('about:blank', '_blank')
-    if (pdfTab) {
-      pdfTab.opener = null
-      pdfTab.document.title = 'Preparing Nexa research PDF…'
-    }
-    setIsOpeningPdf(true)
+  const downloadResearchPdf = async () => {
+    if (!researchPdfUrl || isDownloadingPdf) return
+    setIsDownloadingPdf(true)
     setPdfOpenError('')
     try {
       const response = await apiFetch(researchPdfUrl, { credentials: 'include' })
@@ -503,21 +496,23 @@ const AnswerCards = memo(function AnswerCards({ message, sessionId }) {
         const payload = await response.json().catch(() => ({}))
         throw new Error(payload.detail || 'Nexa could not create the research PDF.')
       }
-      const blob = await response.blob()
-      if (blob.type && !blob.type.includes('pdf')) throw new Error('Nexa did not return a PDF file.')
-      const blobUrl = URL.createObjectURL(blob)
-      if (pdfTab) {
-        pdfTab.location.replace(blobUrl)
-        window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000)
-      } else {
-        window.location.assign(blobUrl)
-        window.setTimeout(() => URL.revokeObjectURL(blobUrl), 60_000)
-      }
+      const pdfBytes = await response.arrayBuffer()
+      const pdfBlob = new Blob([pdfBytes], { type: 'application/pdf' })
+      const header = response.headers.get('content-disposition') || ''
+      const filename = /filename="?([^";]+)"?/i.exec(header)?.[1] || 'nexa-research-report.pdf'
+      const downloadUrl = URL.createObjectURL(pdfBlob)
+      const link = document.createElement('a')
+      link.href = downloadUrl
+      link.download = filename.endsWith('.pdf') ? filename : `${filename}.pdf`
+      link.style.display = 'none'
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
+      window.setTimeout(() => URL.revokeObjectURL(downloadUrl), 0)
     } catch (error) {
-      if (pdfTab && !pdfTab.closed) pdfTab.close()
-      setPdfOpenError(error.message || 'Nexa could not open the research PDF.')
+      setPdfOpenError(error.message || 'Nexa could not download the research PDF.')
     } finally {
-      setIsOpeningPdf(false)
+      setIsDownloadingPdf(false)
     }
   }
 
@@ -530,11 +525,11 @@ const AnswerCards = memo(function AnswerCards({ message, sessionId }) {
               <span>RESEARCH EXPORT</span>
               <strong>Full PDF report</strong>
             </div>
-            <button className="report-pdf-link" type="button" onClick={openResearchPdf} disabled={isOpeningPdf}>
+            <button className="report-pdf-link" type="button" onClick={downloadResearchPdf} disabled={isDownloadingPdf}>
               <span className="report-pdf-mark" aria-hidden="true"><img src="/pdf.png" alt="" /></span>
               <span className="report-pdf-copy">
-                <p>{isOpeningPdf ? 'Preparing PDF...' : 'Open PDF'}</p>
-                <small>{isOpeningPdf ? 'Creating report' : 'View or download'}</small>
+                <p>{isDownloadingPdf ? 'Preparing PDF...' : 'Download Pdf'}</p>
+                <small>{isDownloadingPdf ? 'Creating document' : 'Save to your device'}</small>
               </span>
             </button>
           </div>
