@@ -33,6 +33,7 @@ from Backend.AgentArchitecture import (
 from Backend.Capabilities import capability_prompt
 from Backend.Chatbot import Assistantname, SaveExchange
 from Backend.MongoStore import current_chat_user_email, current_chat_user_id
+from Backend.OwnerRAG import is_owner_question
 from Backend.LLMProvider import (
     LLM_PROVIDER,
     LMSTUDIO_BASE_URL,
@@ -660,6 +661,22 @@ def _direct_reply_context_plan(query: str, tool_names: list[str]) -> dict[str, A
     return None
 
 
+def _owner_profile_plan(query: str, tool_names: list[str]) -> dict[str, Any] | None:
+    """Knowledge requests are deterministic: the private resume tool is required."""
+    if "answer_owner_profile" not in tool_names or not is_owner_question(query):
+        return None
+    return {
+        "intent": "answer owner profile from the configured resume",
+        "needs_tools": True,
+        "tool_names": ["answer_owner_profile"],
+        "workflow": [
+            "Retrieve the owner profile from the persisted resume knowledge base.",
+            "Answer only from the retrieved resume excerpts and cite their pages.",
+        ],
+        "max_tool_calls": 1,
+    }
+
+
 def _plan_validation_error(plan: dict[str, Any], tool_names: list[str]) -> str:
     if not isinstance(plan.get("intent"), str) or not plan["intent"].strip():
         return "intent must be a non-empty string"
@@ -688,6 +705,10 @@ async def _perceive_request_impl(query: str, available_tools: list[Any]) -> dict
     if direct_plan:
         logger.info("perception.direct_reply_context intent=%s tools=%s", direct_plan["intent"], ",".join(direct_plan["tool_names"]))
         return direct_plan
+    owner_plan = _owner_profile_plan(query, tool_names)
+    if owner_plan:
+        logger.info("perception.owner_profile tools=answer_owner_profile")
+        return owner_plan
     planner_query = _planner_query_view(query)
     planner_prompt = f"""You are Nexa's perception planner. Analyze the user's request and produce a safe, bounded execution plan.
     your task is to analyse the user request which is -> {planner_query}

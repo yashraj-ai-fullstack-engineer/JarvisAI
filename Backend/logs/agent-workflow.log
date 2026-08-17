@@ -1333,3 +1333,93 @@
 2026-08-16 02:03:41,662 INFO geoapify.destination scope=local_200km selected={'formatted': 'Yelahanka Railway Station, Bengaluru', 'latitude': 13.1007, 'longitude': 77.5963}
 2026-08-16 02:03:41,662 INFO geoapify.route.resolve origin={'latitude': 13.05, 'longitude': 77.6, 'formatted': 'Current browser location'} destination={'formatted': 'Yelahanka Railway Station, Bengaluru', 'latitude': 13.1007, 'longitude': 77.5963} mode=drive
 2026-08-16 02:03:41,662 WARNING geoapify.places scope=local_200000m error=Geoapify is not configured. Add GEOAPIFY_API_KEY to the project's .env file.; retrying_global=true
+2026-08-17 17:41:41,771 INFO perception.owner_profile tools=answer_owner_profile
+2026-08-17 17:42:07,854 WARNING research.source_failed source=github error_type=HTTPError error_kind=rate_limited status_code=403
+2026-08-17 17:42:07,868 INFO research.github_search mode=new_repositories_ranked_by_stars result_count=1
+2026-08-17 17:42:08,130 WARNING research.source_failed source=public_web error_type=HTTPError error_kind=rate_limited status_code=429
+2026-08-17 17:42:08,447 INFO research.start run_id=e3dcd304-7e19-4a70-9feb-ca7b3c0cbe0d topic=food and nutrition question_type=comparative sources=open_food_facts,public_web
+2026-08-17 17:42:08,447 INFO research.plan run_id=e3dcd304-7e19-4a70-9feb-ca7b3c0cbe0d source_count=2 evidence_target=6 source_coverage_target=2 constraints=4
+2026-08-17 17:42:08,448 INFO research.source_complete run_id=e3dcd304-7e19-4a70-9feb-ca7b3c0cbe0d source=open_food_facts evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:08,448 INFO research.source_complete run_id=e3dcd304-7e19-4a70-9feb-ca7b3c0cbe0d source=public_web evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:08,448 INFO research.coverage_start run_id=e3dcd304-7e19-4a70-9feb-ca7b3c0cbe0d evidence_count=2 target=6 sources=open_food_facts,public_web
+2026-08-17 17:42:08,449 INFO research.coverage_source_complete run_id=e3dcd304-7e19-4a70-9feb-ca7b3c0cbe0d source=open_food_facts evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:08,449 INFO research.coverage_source_complete run_id=e3dcd304-7e19-4a70-9feb-ca7b3c0cbe0d source=public_web evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:08,449 INFO research.coverage_complete run_id=e3dcd304-7e19-4a70-9feb-ca7b3c0cbe0d evidence_count=2 target=6
+2026-08-17 17:42:08,458 INFO research.completed run_id=e3dcd304-7e19-4a70-9feb-ca7b3c0cbe0d evidence_count=2 evidence_target=6 successful_sources=4 failed_sources=0 report_chars=28
+2026-08-17 17:42:08,721 WARNING research.source_failed source=public_web error_type=RuntimeError error_kind=adapter_error status_code=0
+2026-08-17 17:42:09,028 INFO research.start run_id=f66d58bd-288d-4175-97db-f82c33780367 topic=food and nutrition question_type=comparative sources=open_food_facts,public_web
+2026-08-17 17:42:09,028 INFO research.plan run_id=f66d58bd-288d-4175-97db-f82c33780367 source_count=2 evidence_target=6 source_coverage_target=2 constraints=4
+2026-08-17 17:42:09,029 INFO research.source_complete run_id=f66d58bd-288d-4175-97db-f82c33780367 source=open_food_facts evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,029 INFO research.source_complete run_id=f66d58bd-288d-4175-97db-f82c33780367 source=public_web evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,029 INFO research.coverage_start run_id=f66d58bd-288d-4175-97db-f82c33780367 evidence_count=2 target=6 sources=open_food_facts,public_web
+2026-08-17 17:42:09,030 INFO research.coverage_source_complete run_id=f66d58bd-288d-4175-97db-f82c33780367 source=open_food_facts evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,030 INFO research.coverage_source_complete run_id=f66d58bd-288d-4175-97db-f82c33780367 source=public_web evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,030 INFO research.coverage_complete run_id=f66d58bd-288d-4175-97db-f82c33780367 evidence_count=2 target=6
+2026-08-17 17:42:09,040 INFO research.completed run_id=f66d58bd-288d-4175-97db-f82c33780367 evidence_count=2 evidence_target=6 successful_sources=4 failed_sources=0 report_chars=32
+2026-08-17 17:42:09,090 INFO research.start run_id=1f716619-2884-4830-8398-8263a08853ea topic=music and culture question_type=explanatory sources=musicbrainz,dbpedia,public_web
+2026-08-17 17:42:09,091 INFO research.plan run_id=1f716619-2884-4830-8398-8263a08853ea source_count=3 evidence_target=9 source_coverage_target=2 constraints=4
+2026-08-17 17:42:09,092 INFO research.source_complete run_id=1f716619-2884-4830-8398-8263a08853ea source=musicbrainz evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,092 INFO research.source_complete run_id=1f716619-2884-4830-8398-8263a08853ea source=dbpedia evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,092 INFO research.source_complete run_id=1f716619-2884-4830-8398-8263a08853ea source=public_web evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,093 INFO research.coverage_start run_id=1f716619-2884-4830-8398-8263a08853ea evidence_count=3 target=9 sources=musicbrainz,dbpedia,public_web
+2026-08-17 17:42:09,093 INFO research.coverage_source_complete run_id=1f716619-2884-4830-8398-8263a08853ea source=musicbrainz evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,093 INFO research.coverage_source_complete run_id=1f716619-2884-4830-8398-8263a08853ea source=dbpedia evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,093 INFO research.coverage_source_complete run_id=1f716619-2884-4830-8398-8263a08853ea source=public_web evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,093 INFO research.coverage_complete run_id=1f716619-2884-4830-8398-8263a08853ea evidence_count=3 target=9
+2026-08-17 17:42:09,101 INFO research.completed run_id=1f716619-2884-4830-8398-8263a08853ea evidence_count=3 evidence_target=9 successful_sources=6 failed_sources=0 report_chars=32
+2026-08-17 17:42:09,153 INFO research.start run_id=8397ae23-5bdc-4c97-af4f-6b3e6af14f64 topic=software and AI question_type=comparative sources=github,github_releases,huggingface,stackexchange,hacker_news,public_web
+2026-08-17 17:42:09,153 INFO research.plan run_id=8397ae23-5bdc-4c97-af4f-6b3e6af14f64 source_count=6 evidence_target=18 source_coverage_target=2 constraints=4
+2026-08-17 17:42:09,155 INFO research.source_complete run_id=8397ae23-5bdc-4c97-af4f-6b3e6af14f64 source=github evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,155 INFO research.source_complete run_id=8397ae23-5bdc-4c97-af4f-6b3e6af14f64 source=github_releases evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,155 INFO research.source_complete run_id=8397ae23-5bdc-4c97-af4f-6b3e6af14f64 source=huggingface evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,155 INFO research.source_complete run_id=8397ae23-5bdc-4c97-af4f-6b3e6af14f64 source=stackexchange evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,155 INFO research.source_complete run_id=8397ae23-5bdc-4c97-af4f-6b3e6af14f64 source=hacker_news evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,155 INFO research.source_complete run_id=8397ae23-5bdc-4c97-af4f-6b3e6af14f64 source=public_web evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,155 INFO research.coverage_start run_id=8397ae23-5bdc-4c97-af4f-6b3e6af14f64 evidence_count=6 target=18 sources=github_releases,huggingface,stackexchange,hacker_news,public_web
+2026-08-17 17:42:09,156 INFO research.coverage_source_complete run_id=8397ae23-5bdc-4c97-af4f-6b3e6af14f64 source=github_releases evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,156 INFO research.coverage_source_complete run_id=8397ae23-5bdc-4c97-af4f-6b3e6af14f64 source=huggingface evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,156 INFO research.coverage_source_complete run_id=8397ae23-5bdc-4c97-af4f-6b3e6af14f64 source=stackexchange evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,156 INFO research.coverage_source_complete run_id=8397ae23-5bdc-4c97-af4f-6b3e6af14f64 source=hacker_news evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,156 INFO research.coverage_source_complete run_id=8397ae23-5bdc-4c97-af4f-6b3e6af14f64 source=public_web evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,156 INFO research.coverage_complete run_id=8397ae23-5bdc-4c97-af4f-6b3e6af14f64 evidence_count=6 target=18
+2026-08-17 17:42:09,164 INFO research.completed run_id=8397ae23-5bdc-4c97-af4f-6b3e6af14f64 evidence_count=6 evidence_target=18 successful_sources=11 failed_sources=0 report_chars=32
+2026-08-17 17:42:09,204 INFO research.start run_id=f5e20980-dde7-4168-9f61-f5ad1abd5327 topic=history and archives question_type=explanatory sources=internet_archive,common_crawl,dbpedia,public_web
+2026-08-17 17:42:09,204 INFO research.plan run_id=f5e20980-dde7-4168-9f61-f5ad1abd5327 source_count=4 evidence_target=12 source_coverage_target=2 constraints=4
+2026-08-17 17:42:09,205 INFO research.source_complete run_id=f5e20980-dde7-4168-9f61-f5ad1abd5327 source=internet_archive evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,206 INFO research.source_complete run_id=f5e20980-dde7-4168-9f61-f5ad1abd5327 source=common_crawl evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,206 INFO research.source_complete run_id=f5e20980-dde7-4168-9f61-f5ad1abd5327 source=dbpedia evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,206 INFO research.source_complete run_id=f5e20980-dde7-4168-9f61-f5ad1abd5327 source=public_web evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,206 INFO research.coverage_start run_id=f5e20980-dde7-4168-9f61-f5ad1abd5327 evidence_count=4 target=12 sources=internet_archive,common_crawl,dbpedia,public_web
+2026-08-17 17:42:09,207 INFO research.coverage_source_complete run_id=f5e20980-dde7-4168-9f61-f5ad1abd5327 source=internet_archive evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,207 INFO research.coverage_source_complete run_id=f5e20980-dde7-4168-9f61-f5ad1abd5327 source=common_crawl evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,207 INFO research.coverage_source_complete run_id=f5e20980-dde7-4168-9f61-f5ad1abd5327 source=dbpedia evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,207 INFO research.coverage_source_complete run_id=f5e20980-dde7-4168-9f61-f5ad1abd5327 source=public_web evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,207 INFO research.coverage_complete run_id=f5e20980-dde7-4168-9f61-f5ad1abd5327 evidence_count=4 target=12
+2026-08-17 17:42:09,216 INFO research.completed run_id=f5e20980-dde7-4168-9f61-f5ad1abd5327 evidence_count=4 evidence_target=12 successful_sources=8 failed_sources=0 report_chars=32
+2026-08-17 17:42:09,276 INFO research.start run_id=c3837644-d969-4782-9d47-d0df68f7b180 topic=current affairs question_type=time-sensitive sources=gdelt,rss,public_web
+2026-08-17 17:42:09,276 INFO research.plan run_id=c3837644-d969-4782-9d47-d0df68f7b180 source_count=3 evidence_target=9 source_coverage_target=2 constraints=4
+2026-08-17 17:42:09,277 INFO research.source_complete run_id=c3837644-d969-4782-9d47-d0df68f7b180 source=gdelt evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,277 INFO research.source_complete run_id=c3837644-d969-4782-9d47-d0df68f7b180 source=rss evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,277 INFO research.source_complete run_id=c3837644-d969-4782-9d47-d0df68f7b180 source=public_web evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,277 INFO research.coverage_start run_id=c3837644-d969-4782-9d47-d0df68f7b180 evidence_count=3 target=9 sources=gdelt,rss,public_web
+2026-08-17 17:42:09,278 INFO research.coverage_source_complete run_id=c3837644-d969-4782-9d47-d0df68f7b180 source=gdelt evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,278 INFO research.coverage_source_complete run_id=c3837644-d969-4782-9d47-d0df68f7b180 source=rss evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,278 INFO research.coverage_source_complete run_id=c3837644-d969-4782-9d47-d0df68f7b180 source=public_web evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,279 INFO research.coverage_complete run_id=c3837644-d969-4782-9d47-d0df68f7b180 evidence_count=3 target=9
+2026-08-17 17:42:09,289 INFO research.completed run_id=c3837644-d969-4782-9d47-d0df68f7b180 evidence_count=3 evidence_target=9 successful_sources=6 failed_sources=0 report_chars=32
+2026-08-17 17:42:09,346 INFO research.start run_id=2e103eef-964c-4fa3-a2ec-b7faa1c7b8c0 topic=financial markets question_type=explanatory sources=financial_market_data,yahoo_finance
+2026-08-17 17:42:09,346 INFO research.plan run_id=2e103eef-964c-4fa3-a2ec-b7faa1c7b8c0 source_count=2 evidence_target=6 source_coverage_target=2 constraints=7
+2026-08-17 17:42:09,347 INFO research.source_complete run_id=2e103eef-964c-4fa3-a2ec-b7faa1c7b8c0 source=financial_market_data evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,347 INFO research.source_complete run_id=2e103eef-964c-4fa3-a2ec-b7faa1c7b8c0 source=yahoo_finance evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,356 INFO research.completed run_id=2e103eef-964c-4fa3-a2ec-b7faa1c7b8c0 evidence_count=2 evidence_target=6 successful_sources=2 failed_sources=0 report_chars=32
+2026-08-17 17:42:09,395 INFO research.start run_id=fb2c6e7e-f401-44ce-b520-26f5cd925754 topic=GitHub repository activity question_type=time-sensitive sources=github
+2026-08-17 17:42:09,395 INFO research.plan run_id=fb2c6e7e-f401-44ce-b520-26f5cd925754 source_count=1 evidence_target=5 source_coverage_target=1 constraints=6
+2026-08-17 17:42:09,396 INFO research.source_complete run_id=fb2c6e7e-f401-44ce-b520-26f5cd925754 source=github evidence_count=1 cached=False error=False error_kind=none status_code=0
+2026-08-17 17:42:09,406 INFO research.completed run_id=fb2c6e7e-f401-44ce-b520-26f5cd925754 evidence_count=1 evidence_target=5 successful_sources=1 failed_sources=0 report_chars=32
+2026-08-17 17:42:09,674 INFO geoapify.destination scope=local_200km empty_result; retrying_global=true
+2026-08-17 17:42:09,674 INFO geoapify.destination scope=global selected={'formatted': 'Yelahanka Railway Station, Bengaluru', 'latitude': 13.1007, 'longitude': 77.5963}
+2026-08-17 17:42:09,675 INFO geoapify.destination scope=local_200km selected={'formatted': 'Yelahanka Railway Station, Bengaluru', 'latitude': 13.1007, 'longitude': 77.5963}
+2026-08-17 17:42:09,675 INFO geoapify.route.resolve origin={'latitude': 13.05, 'longitude': 77.6, 'formatted': 'Current browser location'} destination={'formatted': 'Yelahanka Railway Station, Bengaluru', 'latitude': 13.1007, 'longitude': 77.5963} mode=drive
+2026-08-17 17:42:09,675 WARNING geoapify.places scope=local_200000m error=Geoapify is not configured. Add GEOAPIFY_API_KEY to the project's .env file.; retrying_global=true
+2026-08-17 17:42:09,717 INFO perception.owner_profile tools=answer_owner_profile
+2026-08-17 17:48:08,834 INFO perception.owner_profile tools=answer_owner_profile

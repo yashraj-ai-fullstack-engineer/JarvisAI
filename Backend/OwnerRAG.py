@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hashlib
 import json
+import logging
 import math
 import re
 from pathlib import Path
@@ -15,8 +17,10 @@ from Backend.LLMProvider import (
     EmbeddingUnavailable,
     embed_texts,
     generate_text,
+    get_config,
 )
 from Backend.Paths import DATA_DIR
+from Backend.PDFQA import PDF_EMBEDDING_MODEL, embed_pdf_texts, supabase_headers, supabase_url
 
 
 ROOT = Path(__file__).resolve().parent
@@ -25,7 +29,10 @@ INDEX_PATH = DATA_DIR / "OwnerRAG" / "index.json"
 CHUNK_MAX_CHARS = 900
 CHUNK_OVERLAP_WORDS = 35
 DEFAULT_TOP_K = 4
-INDEX_VERSION = 3
+INDEX_VERSION = 4
+OWNER_PROFILE_KEY = "nexa_owner"
+OWNER_PROFILE_SUBJECT = "Yashraj Gupta"
+logger = logging.getLogger("nexa.owner_rag")
 
 
 class OwnerRAGError(RuntimeError):
@@ -48,6 +55,8 @@ def is_owner_question(query: str) -> bool:
         "made you",
         "built you",
         "created you",
+        "your master",
+        "master of you",
     )
     profile_markers = (
         "owner profile",
@@ -62,7 +71,11 @@ def is_owner_question(query: str) -> bool:
         "about your owner",
         "about your creator",
     )
-    return any(marker in normalized for marker in owner_markers + profile_markers)
+    return (
+        "yashraj" in normalized
+        or any(marker in normalized for marker in owner_markers + profile_markers)
+        or bool(re.search(r"\bwho is (?:the )?master\b", normalized))
+    )
 
 
 def is_creator_identity_question(query: str) -> bool:
@@ -93,6 +106,10 @@ def is_creator_identity_question(query: str) -> bool:
         "made you",
         "built you",
         "your creator",
+        "your owner",
+        "owner of you",
+        "your master",
+        "master of you",
     )
     return any(marker in normalized for marker in creator_markers)
 
@@ -340,12 +357,38 @@ def _source_mtime(pdf_path: Path = RESUME_PATH) -> float:
     return pdf_path.stat().st_mtime
 
 
+def _source_sha256(pdf_path: Path = RESUME_PATH) -> str:
+    if not pdf_path.exists():
+        raise OwnerRAGError(f"Resume PDF was not found at {pdf_path}.")
+    return hashlib.sha256(pdf_path.read_bytes()).hexdigest()
+
+
+def _owner_profile_key() -> str:
+    return get_config("OWNER_PROFILE_KEY", OWNER_PROFILE_KEY).strip() or OWNER_PROFILE_KEY
+
+
+def _owner_profile_subject() -> str:
+    return get_config("OWNER_PROFILE_SUBJECT", OWNER_PROFILE_SUBJECT).strip() or OWNER_PROFILE_SUBJECT
+
+
+def _source_chunks() -> list[dict[str, Any]]:
+    """Extract stable, section-aware chunks without requiring an embedding service."""
+    chunks: list[dict[str, Any]] = []
+    for page in _extract_pdf_pages():
+        chunks.extend(_structured_page_chunks(page["page"], page["text"]))
+    if not chunks:
+        raise OwnerRAGError("The resume text could not be split into chunks.")
+    for order, chunk in enumerate(chunks):
+        chunk["order"] = order
+    return chunks
+
+
 def _index_is_current(index: dict[str, Any], pdf_path: Path = RESUME_PATH) -> bool:
     return (
         index.get("version") == INDEX_VERSION
         and index.get("source_path") == str(pdf_path)
         and index.get("source_mtime") == _source_mtime(pdf_path)
-        and index.get("embedding_model") == EMBEDDING_MODEL
+        and index.get("embedding_model") in {EMBEDDING_MODEL, "lexical-fallback"}
         and bool(index.get("chunks"))
     )
 
@@ -358,7 +401,7 @@ def _embed_in_batches(texts: list[str], batch_size: int = 16) -> list[list[float
 
 
 def build_owner_index(force: bool = False) -> dict[str, Any]:
-    """Extract the resume, chunk it, embed each chunk, and persist the index."""
+    """Build a local cache. Embeddings enhance it but are never required."""
     if INDEX_PATH.exists() and not force:
         try:
             existing = json.loads(INDEX_PATH.read_text(encoding="utf-8"))
@@ -367,23 +410,18 @@ def build_owner_index(force: bool = False) -> dict[str, Any]:
         except (OSError, json.JSONDecodeError):
             pass
 
-    pages = _extract_pdf_pages()
-    chunks: list[dict[str, Any]] = []
-    for page in pages:
-        chunks.extend(_structured_page_chunks(page["page"], page["text"]))
-
-    if not chunks:
-        raise OwnerRAGError("The resume text could not be split into chunks.")
-
-    for order, chunk in enumerate(chunks):
-        chunk["order"] = order
-
-    embeddings = _embed_in_batches([chunk["text"] for chunk in chunks])
-    if len(embeddings) != len(chunks):
-        raise OwnerRAGError("Embedding count did not match chunk count.")
-
-    for chunk, embedding in zip(chunks, embeddings):
-        chunk["embedding"] = embedding
+    chunks = _source_chunks()
+    embedding_model = "lexical-fallback"
+    if get_config("OWNER_PROFILE_LOCAL_EMBEDDINGS", "false").strip().lower() == "true":
+        try:
+            embeddings = _embed_in_batches([chunk["text"] for chunk in chunks])
+            if len(embeddings) != len(chunks):
+                raise OwnerRAGError("Embedding count did not match chunk count.")
+            for chunk, embedding in zip(chunks, embeddings):
+                chunk["embedding"] = embedding
+            embedding_model = EMBEDDING_MODEL
+        except EmbeddingUnavailable:
+            logger.info("owner_profile.local_embedding_unavailable using=lexical_fallback")
 
     index = {
         "version": INDEX_VERSION,
@@ -391,7 +429,7 @@ def build_owner_index(force: bool = False) -> dict[str, Any]:
         "source_path": str(RESUME_PATH),
         "source_name": RESUME_PATH.name,
         "source_mtime": _source_mtime(),
-        "embedding_model": EMBEDDING_MODEL,
+        "embedding_model": embedding_model,
         "chunk_max_chars": CHUNK_MAX_CHARS,
         "chunk_overlap_words": CHUNK_OVERLAP_WORDS,
         "chunks": chunks,
@@ -413,6 +451,173 @@ def load_owner_index() -> dict[str, Any]:
     return build_owner_index(force=True)
 
 
+def _supabase_enabled() -> bool:
+    return bool(
+        supabase_url()
+        and (
+            get_config("SUPABASE_SERVICE_ROLE_KEY", "").strip()
+            or get_config("SUPABASE_SECRET_KEY", "").strip()
+        )
+    )
+
+
+def _supabase_error(operation: str, response: Any) -> OwnerRAGError:
+    detail = ""
+    try:
+        payload = response.json()
+        detail = str(payload.get("message") or payload.get("hint") or payload.get("code") or "")
+    except Exception:
+        detail = str(getattr(response, "text", "") or "")
+    return OwnerRAGError(f"Supabase owner-profile {operation} failed: {detail[:300] or 'unknown error'}")
+
+
+def _supabase_get_current_document() -> dict[str, Any] | None:
+    import requests
+
+    response = requests.get(
+        f"{supabase_url()}/rest/v1/owner_profile_documents",
+        params={
+            "profile_key": f"eq.{_owner_profile_key()}",
+            "select": "profile_key,source_sha256,embedding_model,source_filename,chunk_count",
+            "limit": "1",
+        },
+        headers=supabase_headers(),
+        timeout=15,
+    )
+    if not response.ok:
+        raise _supabase_error("document lookup", response)
+    rows = response.json()
+    return rows[0] if isinstance(rows, list) and rows else None
+
+
+def sync_owner_profile(force: bool = False) -> dict[str, Any]:
+    """Persist the resume's vectors in Supabase, only when its content changes.
+
+    This runs lazily on the first owner-profile question after a resume update;
+    it never writes personal data from ordinary user chats.
+    """
+    import requests
+
+    if not _supabase_enabled():
+        raise OwnerRAGError(
+            "Supabase owner-profile storage is not configured. Set SUPABASE_URL and SUPABASE_SERVICE_ROLE_KEY."
+        )
+
+    source_sha256 = _source_sha256()
+    current = _supabase_get_current_document()
+    embedding_model = get_config("PDF_EMBEDDING_MODEL", PDF_EMBEDDING_MODEL)
+    if (
+        not force
+        and current
+        and current.get("source_sha256") == source_sha256
+        and current.get("embedding_model") == embedding_model
+        and int(current.get("chunk_count") or 0) > 0
+    ):
+        return {"ok": True, "synced": False, "source_sha256": source_sha256}
+
+    chunks = _source_chunks()
+    embeddings = embed_pdf_texts([chunk["text"] for chunk in chunks])
+    if len(embeddings) != len(chunks):
+        raise OwnerRAGError("Owner-profile embedding count did not match resume chunks.")
+
+    profile_key = _owner_profile_key()
+    document_payload = {
+        "profile_key": profile_key,
+        "subject_name": _owner_profile_subject(),
+        "source_filename": RESUME_PATH.name,
+        "source_sha256": source_sha256,
+        "embedding_model": embedding_model,
+        "chunk_count": len(chunks),
+    }
+    # The first sync needs a parent row for the foreign key. Later updates
+    # insert new chunks before moving the document's source pointer.
+    if current is None:
+        initial_document = requests.post(
+            f"{supabase_url()}/rest/v1/owner_profile_documents?on_conflict=profile_key",
+            json=document_payload,
+            headers=supabase_headers("resolution=merge-duplicates"),
+            timeout=20,
+        )
+        if not initial_document.ok:
+            raise _supabase_error("initial document upsert", initial_document)
+    chunk_rows = [
+        {
+            "profile_key": profile_key,
+            "source_sha256": source_sha256,
+            "chunk_key": chunk["id"],
+            "chunk_index": int(chunk["order"]),
+            "page_number": int(chunk["page"]),
+            "section": str(chunk.get("section") or "General"),
+            "title": str(chunk.get("title") or ""),
+            "chunk_text": str(chunk["text"]),
+            "embedding": embedding,
+            "metadata": {"source_filename": RESUME_PATH.name},
+        }
+        for chunk, embedding in zip(chunks, embeddings)
+    ]
+    headers = supabase_headers("resolution=merge-duplicates")
+    chunks_response = requests.post(
+        f"{supabase_url()}/rest/v1/owner_profile_chunks?on_conflict=profile_key,source_sha256,chunk_key",
+        json=chunk_rows,
+        headers=headers,
+        timeout=30,
+    )
+    if not chunks_response.ok:
+        raise _supabase_error("chunk upsert", chunks_response)
+
+    # The document pointer changes only after every vector is present, so a
+    # concurrent read always sees a complete previous or complete new index.
+    document_response = requests.post(
+        f"{supabase_url()}/rest/v1/owner_profile_documents?on_conflict=profile_key",
+        json=document_payload,
+        headers=supabase_headers("resolution=merge-duplicates,return=representation"),
+        timeout=20,
+    )
+    if not document_response.ok:
+        raise _supabase_error("document upsert", document_response)
+    return {"ok": True, "synced": True, "source_sha256": source_sha256, "chunks": len(chunks)}
+
+
+def _retrieve_supabase_context(question: str, top_k: int) -> dict[str, Any]:
+    import requests
+
+    sync_owner_profile()
+    query_embedding = embed_pdf_texts([question])[0]
+    response = requests.post(
+        f"{supabase_url()}/rest/v1/rpc/match_owner_profile_chunks",
+        json={
+            "p_profile_key": _owner_profile_key(),
+            "p_query_embedding": query_embedding,
+            "p_match_count": min(max(top_k, 1), 12),
+        },
+        headers=supabase_headers(),
+        timeout=20,
+    )
+    if not response.ok:
+        raise _supabase_error("vector search", response)
+    rows = response.json()
+    if not isinstance(rows, list) or not rows:
+        raise OwnerRAGError("Supabase owner-profile retrieval returned no resume chunks.")
+    return {
+        "source": RESUME_PATH.name,
+        "embedding_model": get_config("PDF_EMBEDDING_MODEL", PDF_EMBEDDING_MODEL),
+        "retrieval_mode": "supabase_vector",
+        "matches": [
+            {
+                "id": str(row.get("chunk_key") or row.get("id") or "owner-profile-chunk"),
+                "page": int(row.get("page_number") or 1),
+                "section": str(row.get("section") or "General"),
+                "title": str(row.get("title") or ""),
+                "order": int(row.get("chunk_index") or 0),
+                "text": str(row.get("chunk_text") or ""),
+                "score": round(float(row.get("similarity") or 0), 4),
+            }
+            for row in rows
+            if str(row.get("chunk_text") or "").strip()
+        ],
+    }
+
+
 def _cosine_similarity(left: list[float], right: list[float]) -> float:
     if len(left) != len(right) or not left:
         return -1.0
@@ -422,6 +627,18 @@ def _cosine_similarity(left: list[float], right: list[float]) -> float:
     if not left_norm or not right_norm:
         return -1.0
     return dot / (left_norm * right_norm)
+
+
+def _lexical_score(question: str, chunk: dict[str, Any]) -> float:
+    """Stable fallback for a small owner profile when vectors are unavailable."""
+    query_terms = set(re.findall(r"[a-z0-9]+", question.lower()))
+    chunk_terms = re.findall(r"[a-z0-9]+", str(chunk.get("text") or "").lower())
+    if not query_terms or not chunk_terms:
+        return 0.0
+    matched = sum(1 for term in query_terms if term in chunk_terms)
+    heading = f"{chunk.get('section', '')} {chunk.get('title', '')}".lower()
+    heading_matches = sum(1 for term in query_terms if term in heading)
+    return (matched / len(query_terms)) + (heading_matches * 0.15)
 
 
 def _identity_anchor(index: dict[str, Any]) -> dict[str, Any] | None:
@@ -440,34 +657,65 @@ def _identity_anchor(index: dict[str, Any]) -> dict[str, Any] | None:
 
 
 def retrieve_owner_context(question: str, top_k: int = DEFAULT_TOP_K) -> dict[str, Any]:
-    """Embed the question and return the most relevant resume chunks."""
+    """Retrieve owner facts from Supabase, with a local lexical safety net."""
     cleaned_question = " ".join(question.split())
     if not cleaned_question:
         raise OwnerRAGError("Question cannot be empty.")
 
-    index = load_owner_index()
-    query_embedding = embed_texts([cleaned_question])[0]
     requested_sections = _query_sections(cleaned_question)
     if len(requested_sections) >= 3:
-        top_k = max(top_k, min(len(index["chunks"]), 8))
+        top_k = max(top_k, 8)
+
+    retrieval: dict[str, Any] | None = None
+    if _supabase_enabled():
+        try:
+            retrieval = _retrieve_supabase_context(cleaned_question, top_k)
+        except Exception as exc:
+            # The owner profile remains usable during a temporary Supabase or
+            # embedding outage. This never falls back to unrelated web data.
+            logger.warning("owner_profile.supabase_unavailable error_type=%s", type(exc).__name__)
+
+    if retrieval is None:
+        index = load_owner_index()
+        chunks = index["chunks"]
+        vector_query: list[float] | None = None
+        if all(chunk.get("embedding") for chunk in chunks):
+            try:
+                vector_query = embed_texts([cleaned_question])[0]
+            except EmbeddingUnavailable:
+                vector_query = None
+        retrieval = {
+            "source": index["source_name"],
+            "embedding_model": index["embedding_model"],
+            "retrieval_mode": "local_vector" if vector_query else "local_lexical_fallback",
+            "matches": [],
+        }
+        scored = []
+        for chunk in chunks:
+            score = (
+                _cosine_similarity(vector_query, chunk.get("embedding") or [])
+                if vector_query
+                else _lexical_score(cleaned_question, chunk)
+            )
+            scored.append({
+                "id": chunk["id"],
+                "page": chunk["page"],
+                "section": chunk.get("section", "General"),
+                "title": chunk.get("title", ""),
+                "order": chunk.get("order", 0),
+                "text": chunk["text"],
+                "score": round(score, 4),
+            })
+        retrieval["matches"] = sorted(scored, key=lambda item: item["score"], reverse=True)[:top_k]
+
+    scored = list(retrieval["matches"])
+    matches = scored[:top_k]
     section_boost = 0.18
-    scored = []
-    for chunk in index["chunks"]:
-        score = _cosine_similarity(query_embedding, chunk["embedding"])
+    for chunk in scored:
         section = chunk.get("section", "General")
         if section in requested_sections:
-            score += section_boost
-        scored.append({
-            "id": chunk["id"],
-            "page": chunk["page"],
-            "section": section,
-            "title": chunk.get("title", ""),
-            "order": chunk.get("order", 0),
-            "text": chunk["text"],
-            "score": round(score, 4),
-        })
-
-    matches = sorted(scored, key=lambda item: item["score"], reverse=True)[:top_k]
+            chunk["score"] = round(float(chunk.get("score") or 0) + section_boost, 4)
+    matches = sorted(matches, key=lambda item: item["score"], reverse=True)
     matches = _ensure_section_coverage(matches, scored, requested_sections, top_k)
     should_anchor_identity = (
         is_creator_identity_question(cleaned_question)
@@ -475,15 +723,16 @@ def retrieve_owner_context(question: str, top_k: int = DEFAULT_TOP_K) -> dict[st
         or "Profile" in requested_sections
     )
     if is_owner_question(cleaned_question) and should_anchor_identity:
-        anchor = _identity_anchor(index)
+        anchor = next((match for match in scored if match.get("section") == "Profile"), None)
         if anchor and all(match["id"] != anchor["id"] for match in matches):
-            matches = [anchor, *matches[:max(0, top_k - 1)]]
+            matches = [{**anchor, "score": max(float(anchor.get("score") or 0), 1.0), "reason": "profile_anchor"}, *matches[:max(0, top_k - 1)]]
 
     return {
         "ok": True,
         "question": cleaned_question,
-        "source": index["source_name"],
-        "embedding_model": index["embedding_model"],
+        "source": retrieval["source"],
+        "embedding_model": retrieval["embedding_model"],
+        "retrieval_mode": retrieval["retrieval_mode"],
         "requested_sections": sorted(requested_sections),
         "matches": matches,
     }
@@ -551,10 +800,10 @@ def answer_owner_question(question: str, top_k: int = DEFAULT_TOP_K) -> dict[str
         for match in retrieval["matches"]
     )
     creator_relation_instruction = (
-        "The question asks who created or owns this assistant. A resume entry "
-        "about an AI-assistant project does not, by itself, establish who "
-        "created this running assistant. Only identify a creator if an excerpt "
-        "explicitly states that relationship."
+        f"Nexa's configured owner-profile subject is {_owner_profile_subject()}. "
+        "For owner, creator, developer, or master identity questions, identify "
+        "that subject directly. All biographical details after that identity "
+        "statement must be grounded in the supplied resume excerpts."
         if is_creator_identity_question(question)
         else ""
     )
@@ -562,8 +811,9 @@ def answer_owner_question(question: str, top_k: int = DEFAULT_TOP_K) -> dict[str
         "Answer questions from the supplied resume excerpts. The excerpts are "
         "the only permitted source of personal facts. Do not use general "
         "knowledge, chat history, application configuration, or assumptions. "
-        "Do not infer that the resume subject created, owns, or is related to "
-        "the assistant unless an excerpt explicitly says so. Write resume facts "
+        "For an owner, creator, developer, or master identity question, the "
+        "configured owner-profile subject is an allowed application identity. "
+        "Write resume facts "
         "about the subject in third person, never as the assistant's own "
         "experience. If the excerpts do not support the answer, say exactly: "
         "'I couldn't find that in Resume_Yashraj.pdf.' Be concise, avoid "
@@ -586,7 +836,7 @@ def answer_owner_question(question: str, top_k: int = DEFAULT_TOP_K) -> dict[str
 
 def _main() -> None:
     parser = argparse.ArgumentParser(description="Build and query the owner resume RAG index.")
-    parser.add_argument("command", choices=["build", "retrieve", "ask"])
+    parser.add_argument("command", choices=["build", "sync", "retrieve", "ask"])
     parser.add_argument("question", nargs="*", help="Question for retrieve or ask.")
     parser.add_argument("--force", action="store_true", help="Rebuild the index even if it is current.")
     args = parser.parse_args()
@@ -600,6 +850,8 @@ def _main() -> None:
                 "chunks": len(index["chunks"]),
                 "embedding_model": index["embedding_model"],
             }, indent=2))
+        elif args.command == "sync":
+            print(json.dumps(sync_owner_profile(force=args.force), indent=2))
         elif args.command == "retrieve":
             print(json.dumps(retrieve_owner_context(" ".join(args.question)), indent=2))
         else:

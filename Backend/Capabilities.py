@@ -173,6 +173,7 @@ _CURRENCY_QUERY = re.compile(
 _OWNER_QUERY = re.compile(
     (
         r"\b(?:yashraj|your owner|your creator|your developer|"
+        r"your master|who is (?:the )?master|"
         r"who (?:made|built|created|developed) you|"
         r"owner (?:profile|resume|skills|projects|education|experience))\b"
     ),

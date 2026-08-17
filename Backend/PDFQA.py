@@ -99,7 +99,7 @@ def remember_pdf_document(
     question: str,
     user_id: str,
 ) -> dict[str, Any]:
-    """Persist a document only after the user explicitly uses Remember:."""
+    """Persist a document only after the user explicitly uses /remember."""
     clean_question = " ".join(question.split()) or f"Summarize {filename}."
     if not user_id:
         raise PDFQAError("Sign in before saving a document to your document memory.")
@@ -150,10 +150,10 @@ def remember_pdf_document(
 
 
 def answer_saved_document_question(*, user_id: str, question: str) -> dict[str, Any]:
-    """Answer a Doc: query from every document explicitly saved by this user."""
+    """Answer a /doc query from every document explicitly saved by this user."""
     clean_question = " ".join(question.split())
     if not clean_question:
-        raise PDFQAError("Write a question after Doc:.")
+        raise PDFQAError("Write a question after /doc.")
     if not user_id:
         raise PDFQAError("Sign in before searching your saved documents.")
     query_embedding = embed_pdf_texts([clean_question])[0]
@@ -163,7 +163,7 @@ def answer_saved_document_question(*, user_id: str, question: str) -> dict[str, 
         match_count=RETRIEVAL_TOP_K,
     )
     if not matches:
-        raise PDFQAError("No saved document matched that question. Upload one with Remember: first.")
+        raise PDFQAError("No saved document matched that question. Upload one with /remember first.")
     answer = generate_grounded_answer(clean_question, "your saved documents", matches)
     return {
         "answer": answer,
