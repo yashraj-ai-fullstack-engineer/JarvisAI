@@ -158,6 +158,24 @@ def render_research_pdf(run: dict[str, Any], target: Path) -> None:
     document.build(story, onFirstPage=_footer, onLaterPages=_footer)
 
 
+def render_research_pdf_bytes(run: dict[str, Any]) -> bytes:
+    """Generate a one-time PDF response without persisting an export."""
+    descriptor, temporary_name = tempfile.mkstemp(prefix="nexa-research-", suffix=".pdf")
+    os.close(descriptor)
+    temporary = Path(temporary_name)
+    try:
+        render_research_pdf(run, temporary)
+        return temporary.read_bytes()
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def research_export_filename(run: dict[str, Any]) -> str:
+    topic = _safe_filename(str(run.get("topic") or "report"))
+    run_id = _safe_filename(str(run.get("id") or "report"))[:8]
+    return f"nexa-research-{topic}-{run_id}.pdf"
+
+
 class _LocalStorage:
     name = "local"
 

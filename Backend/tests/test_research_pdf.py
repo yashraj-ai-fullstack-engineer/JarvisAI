@@ -5,11 +5,13 @@ from pathlib import Path
 from unittest import TestCase
 from unittest.mock import patch
 
+from fastapi.testclient import TestClient
 from pypdf import PdfReader
 
 from Backend.DeepResearch import ResearchRunStore, build_research_plan
 from Backend.MongoStore import chat_session_context
 from Backend.ResearchPdfService import _LocalStorage, create_or_reuse_export, local_export_path
+from Backend.WebApp import app
 
 
 class ResearchPdfTests(TestCase):
@@ -36,7 +38,13 @@ class ResearchPdfTests(TestCase):
         }
 
     def test_local_export_is_cached_and_contains_report_and_source_trace(self) -> None:
-        with tempfile.TemporaryDirectory() as temp_dir, patch("Backend.ResearchPdfService.DATA_DIR", Path(temp_dir)):
+        with tempfile.TemporaryDirectory() as temp_dir, patch(
+            "Backend.ResearchPdfService.DATA_DIR",
+            Path(temp_dir),
+        ), patch(
+            "Backend.ResearchPdfService._storage",
+            side_effect=_LocalStorage,
+        ):
             run = self._completed_run()
             first = create_or_reuse_export(run)
             self.assertEqual(first["storage"], "local")
@@ -75,3 +83,24 @@ class ResearchPdfTests(TestCase):
         self.assertEqual(owned["pdf_export"]["storage"], "local")
         self.assertIsNone(other_user)
         self.assertIsNone(other_session)
+
+    def test_export_is_downloaded_as_a_pdf_without_persisting_it(self) -> None:
+        run = self._completed_run()
+
+        with TestClient(app) as browser, patch(
+            "Backend.WebApp._require_chat_session",
+            return_value={"id": "user-a", "name": "Yash", "email": "yash@example.com"},
+        ), patch(
+            "Backend.WebApp.RESEARCH_RUN_STORE.get_for_current_user",
+            return_value=run,
+        ), patch(
+            "Backend.WebApp.render_research_pdf_bytes",
+            return_value=b"%PDF-1.7\nresearch report",
+        ):
+            response = browser.get("/api/chats/session-a/research-runs/run-pdf-123/export.pdf")
+
+        self.assertEqual(response.status_code, 200)
+        self.assertEqual(response.headers["content-type"], "application/pdf")
+        self.assertIn("attachment", response.headers["content-disposition"])
+        self.assertTrue(response.headers["content-disposition"].endswith('.pdf"'))
+        self.assertEqual(response.content, b"%PDF-1.7\nresearch report")

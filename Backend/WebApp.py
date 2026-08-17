@@ -11,7 +11,6 @@ import secrets
 import asyncio
 from pathlib import Path
 from urllib.parse import urlencode
-import requests
 
 BACKEND_ROOT = Path(__file__).resolve().parent
 PROJECT_ROOT = BACKEND_ROOT.parent
@@ -75,9 +74,8 @@ from Backend.PDFQA import (
 )
 from Backend.ResearchPdfService import (
     ResearchPdfError,
-    create_or_reuse_export,
-    local_export_path,
-    remote_export_url,
+    render_research_pdf_bytes,
+    research_export_filename,
 )
 from Backend.GoogleOAuth import (
     GoogleOAuthError,
@@ -572,7 +570,7 @@ def research_runs_api(session_id: str, request: Request, limit: int = 20) -> dic
 
 @app.get("/api/chats/{session_id}/research-runs/{run_id}/export.pdf")
 async def research_run_pdf_export_api(session_id: str, run_id: str, request: Request):
-    """Open a user's private research export inline in a browser PDF viewer."""
+    """Generate a one-time PDF download for a completed research run."""
     user = _require_chat_session(request, session_id)
     with chat_session_context(session_id, user["id"]):
         run = RESEARCH_RUN_STORE.get_for_current_user(run_id)
@@ -581,16 +579,15 @@ async def research_run_pdf_export_api(session_id: str, run_id: str, request: Req
             # else; the endpoint must not become an artifact enumeration API.
             raise HTTPException(status_code=404, detail="Research report not found.")
         try:
-            export = await run_in_threadpool(create_or_reuse_export, run)
-            RESEARCH_RUN_STORE.set_pdf_export(run_id, export)
-            if export.get("storage") == "supabase":
-                return RedirectResponse(remote_export_url(export), status_code=307)
-            return FileResponse(
-                local_export_path(export),
+            pdf_content = await run_in_threadpool(render_research_pdf_bytes, run)
+            return Response(
+                content=pdf_content,
                 media_type="application/pdf",
-                filename=str(export.get("filename") or "nexa-research-report.pdf"),
-                content_disposition_type="inline",
-                headers={"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"},
+                headers={
+                    "Content-Disposition": f'attachment; filename="{research_export_filename(run)}"',
+                    "X-Content-Type-Options": "nosniff",
+                    "Cache-Control": "private, no-store",
+                },
             )
         except ResearchPdfError as exc:
             raise HTTPException(status_code=503, detail=str(exc)) from exc
