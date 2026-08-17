@@ -260,7 +260,10 @@ function areMessagesEquivalent(current, next) {
       && message.target_user_id === candidate.target_user_id
       && message.targetEmail === candidate.targetEmail
       && message.systemAction === candidate.systemAction
+      && message.researchRunId === candidate.researchRunId
       && message.feedback === candidate.feedback
+      && message.documentName === candidate.documentName
+      && JSON.stringify(message.cards || null) === JSON.stringify(candidate.cards || null)
       && JSON.stringify(message.replyTo || null) === JSON.stringify(candidate.replyTo || null)
   })
 }
@@ -1104,11 +1107,14 @@ function App() {
     await createChatSession()
     setLeftPanelOpen(false)
   }, [activeSessionId, chatSessions, createChatSession, openChatSession, user])
+  const isAssistantLikeMessage = useCallback((message) => (
+    message?.role === 'assistant' || Boolean(message?.researchRunId)
+  ), [])
   const messageAuthorLabel = useCallback((message) => (
-    message?.role === 'assistant'
+    isAssistantLikeMessage(message)
       ? 'Nexa'
       : (message?.senderName || (message?.sender_user_id === user?.id ? 'You' : 'Member'))
-  ), [user?.id])
+  ), [isAssistantLikeMessage, user?.id])
   const systemMessageText = useCallback((message) => {
     if (!message?.systemAction) return message?.text || ''
     const isTarget = message.target_user_id && message.target_user_id === user?.id
@@ -2429,7 +2435,7 @@ function App() {
                 {...(message.role !== 'system' && message.createdAt ? { 'data-message-day': formatMessageDay(message.createdAt) } : {})}
               >
                 {message.role === 'system' ? <p className="system-message"><span className="system-message-pulse" aria-hidden="true" />{systemMessageText(message)}</p> : <>
-                {message.role === 'assistant' && (
+                {isAssistantLikeMessage(message) && (
                   <div className="assistant-avatar"><Logo /></div>
                 )}
                 <div className="message-content">
@@ -2448,11 +2454,11 @@ function App() {
                   </div>
                   {message.replyTo && (
                     <div className="message-reply-quote">
-                      <strong>{message.replyTo.role === 'assistant' ? 'Nexa' : (message.replyTo.senderName || (message.replyTo.sender_user_id === user?.id ? 'You' : 'Member'))}</strong>
+                      <strong>{message.replyTo.role === 'assistant' || message.replyTo.researchRunId ? 'Nexa' : (message.replyTo.senderName || (message.replyTo.sender_user_id === user?.id ? 'You' : 'Member'))}</strong>
                       <span>{message.replyTo.text}</span>
                     </div>
                   )}
-                  {message.role === 'assistant'
+                  {isAssistantLikeMessage(message)
                     ? (
                       <>
                         <MarkdownResponse>{message.text}</MarkdownResponse>
@@ -2682,7 +2688,7 @@ function App() {
               <div className="reply-composer-preview" role="status">
                 <Reply size={14} aria-hidden="true" />
                 <div>
-                  <strong>Replying to {replyTarget.role === 'assistant' ? 'Nexa' : (replyTarget.senderName || (replyTarget.sender_user_id === user?.id ? 'you' : 'Member'))}</strong>
+                  <strong>Replying to {replyTarget.role === 'assistant' || replyTarget.researchRunId ? 'Nexa' : (replyTarget.senderName || (replyTarget.sender_user_id === user?.id ? 'you' : 'Member'))}</strong>
                   <span>{replyTarget.text}</span>
                 </div>
                 <button type="button" onClick={() => setReplyTarget(null)} aria-label="Cancel reply" title="Cancel reply">

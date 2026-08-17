@@ -2412,8 +2412,6 @@ button {
   padding: 6px 9px;
   border: 1px solid rgba(135, 242, 202, .24);
   border-radius: 8px;
-  color: #b9f9da;
-  background: rgba(5, 19, 27, .3);
   font-size: 11px;
   line-height: 1.25;
   overflow: hidden;
@@ -2423,7 +2421,6 @@ button {
 
 .message-document-ref svg {
   flex: 0 0 auto;
-  color: #8ff5cb;
 }
 
 .message.assistant .markdown-body,
