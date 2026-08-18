@@ -48,7 +48,13 @@ def _db():
     if not uri:
         raise StoreUnavailable("MongoDB is not configured. Set MONGODB_URI in .env.")
     try:
-        _client = MongoClient(uri, serverSelectionTimeoutMS=5000)
+        # Keep local auth requests responsive when Atlas DNS/network access is unavailable.
+        _client = MongoClient(
+            uri,
+            connectTimeoutMS=3000,
+            serverSelectionTimeoutMS=5000,
+            socketTimeoutMS=5000,
+        )
         _client.admin.command("ping")
         _database = _client[os.getenv("MONGODB_DATABASE", "nexa")]
         _database.users.create_index("email", unique=True)

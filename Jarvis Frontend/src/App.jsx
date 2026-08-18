@@ -770,7 +770,7 @@ function AmbientParticles({ id = 'nexa-particles', className = 'ambient-particle
   /></ParticlesProvider>
 }
 
-function AuthScreen({ onSignedIn }) {
+function AuthScreen({ onSignedIn, onClose, dialog = false }) {
   const [mode, setMode] = useState('login')
   const [name, setName] = useState('')
   const [email, setEmail] = useState('')
@@ -801,10 +801,15 @@ function AuthScreen({ onSignedIn }) {
     window.location.assign(`${API_BASE}/api/auth/google`)
   }
 
-  return <main className="auth-screen"><AmbientParticles /><section className="auth-card">
+  const card = <section className={`auth-card ${dialog ? 'auth-dialog-card' : ''}`}>
+    {dialog && (
+      <button className="auth-dialog-close" type="button" onClick={onClose} aria-label="Close sign in">
+        <X size={18} />
+      </button>
+    )}
     <div className="auth-brand"><Logo /><span>NEXA</span></div>
     <p className="section-label">PRIVATE WORKSPACE</p>
-    <h1>{mode === 'login' ? 'Welcome back' : 'Create your account'}</h1>
+    <h1 id={dialog ? 'auth-dialog-title' : undefined}>{mode === 'login' ? 'Welcome back' : 'Create your account'}</h1>
     <p>Sign in to save and revisit your chat sessions.</p>
     <button className="google-signin" type="button" onClick={startGoogleSignIn}>
       <span><img src="/google.png" alt="Google" style = {{ width: '20px', height: '20px' }} /></span> Sign in with Google
@@ -820,7 +825,19 @@ function AuthScreen({ onSignedIn }) {
     <button type="button" className="auth-switch" onClick={() => { setMode(mode === 'login' ? 'register' : 'login'); setError('') }}>
       {mode === 'login' ? 'New here? Create an account' : 'Already have an account? Sign in'}
     </button>
-  </section></main>
+  </section>
+
+  if (dialog) {
+    return (
+      <div className="auth-modal-backdrop" role="presentation">
+        <div className="auth-modal" role="dialog" aria-modal="true" aria-labelledby="auth-dialog-title">
+          {card}
+        </div>
+      </div>
+    )
+  }
+
+  return <main className="auth-screen"><AmbientParticles />{card}</main>
 }
 
 function App() {
@@ -2159,8 +2176,6 @@ function App() {
     }
   }, [messages.length, isThinking, liveAnswer, thinkingStatus])
 
-  if (authView) return <AuthScreen onSignedIn={completeSignIn} />
-
   const activeSession = chatSessions.find((session) => session.id === activeSessionId)
   const sharedSessionActive = activeSessionIsShared
   const showingJoinedInviteConfirmation = Boolean(joinedInviteSessionId && activeSessionId === joinedInviteSessionId)
@@ -3018,6 +3033,13 @@ function App() {
           </p>
         </aside>
       </section>
+      {authView && !user && (
+        <AuthScreen
+          dialog
+          onSignedIn={completeSignIn}
+          onClose={() => setAuthView(false)}
+        />
+      )}
     </main>
   )
 }
