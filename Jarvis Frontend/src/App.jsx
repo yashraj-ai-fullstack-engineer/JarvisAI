@@ -1,5 +1,5 @@
 import { memo, useCallback, useEffect, useRef, useState } from 'react'
-import { Check, CircleHelp, Command, Copy, Crown, FileText, Link2, Menu, Moon, Plus, Reply, Search, SendHorizontal, Share2, Sparkles, Sun, ThumbsDown, ThumbsUp, Trash2, UserMinus, Users, X } from 'lucide-react'
+import { Check, CircleHelp, Command, Copy, Crown, FileText, Link2, LoaderCircle, Menu, Moon, Plus, Reply, Search, SendHorizontal, Share2, Sparkles, Sun, ThumbsDown, ThumbsUp, Trash2, UserMinus, Users, X } from 'lucide-react'
 import Particles, { ParticlesProvider } from '@tsparticles/react'
 import { loadSlim } from '@tsparticles/slim'
 import MarkdownResponse from './components/MarkdownResponse.jsx'
@@ -777,6 +777,7 @@ function AuthScreen({ onSignedIn, onClose, dialog = false }) {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [busy, setBusy] = useState(false)
+  const [googleBusy, setGoogleBusy] = useState(false)
 
   const submit = async (event) => {
     event.preventDefault()
@@ -797,8 +798,16 @@ function AuthScreen({ onSignedIn, onClose, dialog = false }) {
   }
 
   const startGoogleSignIn = () => {
-    writePendingInviteToken(inviteTokenFromPath())
-    window.location.assign(`${API_BASE}/api/auth/google`)
+    if (googleBusy) return
+    setGoogleBusy(true)
+    setError('')
+    try {
+      writePendingInviteToken(inviteTokenFromPath())
+      window.location.assign(`${API_BASE}/api/auth/google`)
+    } catch (requestError) {
+      setGoogleBusy(false)
+      setError(requestError.message || 'Could not connect to Google.')
+    }
   }
 
   const card = <section className={`auth-card ${dialog ? 'auth-dialog-card' : ''}`}>
@@ -811,8 +820,9 @@ function AuthScreen({ onSignedIn, onClose, dialog = false }) {
     <p className="section-label">PRIVATE WORKSPACE</p>
     <h1 id={dialog ? 'auth-dialog-title' : undefined}>{mode === 'login' ? 'Welcome back' : 'Create your account'}</h1>
     <p>Sign in to save and revisit your chat sessions.</p>
-    <button className="google-signin" type="button" onClick={startGoogleSignIn}>
-      <span><img src="/google.png" alt="Google" style = {{ width: '20px', height: '20px' }} /></span> Sign in with Google
+    <button className="google-signin" type="button" onClick={startGoogleSignIn} disabled={googleBusy} aria-busy={googleBusy}>
+      {googleBusy ? <LoaderCircle className="auth-button-spinner" size={20} aria-hidden="true" /> : <span><img src="/google.png" alt="Google" style={{ width: '20px', height: '20px' }} /></span>}
+      {googleBusy ? 'Connecting to Google...' : 'Sign in with Google'}
     </button>
     <div className="auth-divider"><span>or</span></div>
     <form onSubmit={submit} className="auth-form">
