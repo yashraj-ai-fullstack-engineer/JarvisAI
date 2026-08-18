@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
 import sys
@@ -34,6 +35,7 @@ def _ensure_project_python() -> None:
 if __name__ == "__main__":
     _ensure_project_python()
 
+import requests
 from fastapi import FastAPI, File, Form, HTTPException, Request, UploadFile, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, JSONResponse, RedirectResponse, Response, StreamingResponse
@@ -127,6 +129,7 @@ from Backend.MongoStore import (
 )
 
 
+logger = logging.getLogger(__name__)
 ROOT = BACKEND_ROOT
 FRONTEND_DIST = PROJECT_ROOT / "Jarvis Frontend" / "dist"
 _chat_locks_guard = threading.Lock()
@@ -503,6 +506,14 @@ def google_login_callback(code: str = "", state: str = "", error: str = "") -> R
         token = create_auth_session(user)
     except (StoreUnavailable, ValueError, requests.RequestException) as exc:
         return RedirectResponse(_frontend_redirect({"auth_error": str(exc)}), status_code=302)
+    except Exception:
+        # OAuth must finish in the frontend even when an unexpected provider or
+        # persistence error occurs; a raw backend 500 leaves the user stranded.
+        logger.exception("Unexpected Google sign-in callback failure")
+        return RedirectResponse(
+            _frontend_redirect({"auth_error": "Google sign-in could not be completed. Please try again."}),
+            status_code=302,
+        )
     response = RedirectResponse(_frontend_redirect({"auth": "google", "token": token}), status_code=302)
     _set_auth_cookie(response, token)
     return response

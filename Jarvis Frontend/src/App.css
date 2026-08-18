@@ -1970,6 +1970,11 @@ button {
 @keyframes agent-status-pulse { 50% { opacity: .45; transform: scale(.82); } }
 .auth-screen { display: grid; min-height: 100vh; place-items: center; padding: 24px; background: #07130f; color: #ecfff6; }
 .auth-card { width: min(100%, 420px); padding: 34px; border: 1px solid #284d40; border-radius: 20px; background: #10231d; box-shadow: 0 20px 70px rgba(0,0,0,.35); }
+.auth-modal-backdrop { position: fixed; z-index: 100; inset: 0; display: grid; place-items: center; padding: 24px; background: rgba(3, 8, 12, .54); backdrop-filter: blur(10px); }
+.auth-modal { width: min(100%, 420px); }
+.auth-dialog-card { position: relative; width: 100%; box-sizing: border-box; }
+.auth-dialog-close { position: absolute; top: 14px; right: 14px; display: grid; width: 34px; height: 34px; place-items: center; border: 1px solid rgba(156, 238, 199, .22); border-radius: 9px; color: #bfeedd; background: rgba(8, 20, 16, .72); cursor: pointer; }
+.auth-dialog-close:hover { color: #ffffff; border-color: rgba(156, 238, 199, .45); background: rgba(38, 72, 59, .82); }
 .auth-brand { display: flex; align-items: center; gap: 10px; margin-bottom: 28px; font-weight: 900; letter-spacing: .13em; }
 .auth-card h1 { margin: 7px 0; font-size: 29px; }.auth-card > p { color: #a5b9b1; }
 .auth-form { display: grid; gap: 11px; }.auth-form input { width: 100%; box-sizing: border-box; padding: 12px; border: 1px solid #365b4d; border-radius: 9px; color: #effff8; background: #091712; }
@@ -2014,6 +2019,7 @@ button {
 .navbar-google-button > span { display: grid; gap: 1px; text-align: left; line-height: 1.05; }.navbar-google-button b { font-size: 12px; }.navbar-google-button small { color: #91a1b4; font-size: 9px; font-weight: 450; }.navbar-google-button.connected small { color: #80f2c3; }
 .mobile-panel-actions,.mobile-drawer-close,.mobile-panel-scrim { display: none; }
 .auth-screen { position: relative; overflow: hidden; }.auth-screen .auth-card { position: relative; z-index: 1; }
+.app-shell > .auth-modal-backdrop { position: fixed; z-index: 100; }
 
 @media (max-width: 760px) {
   .topbar { height: 64px; grid-template-columns: auto 1fr auto; padding: 0 5px; }.brand { justify-self: center; }.brand-emblem { width: 35px; height: 35px; }.brand-copy small,.system-state,.navbar-google-actions { display: none; }.topbar-actions { gap: 0; }.profile-button { width: 34px; height: 34px; }.mobile-panel-actions { display: block; }.mobile-panel-actions.right { justify-self: end; }.mobile-panel-actions button,.mobile-drawer-close { display: grid; width: 36px; height: 36px; place-items: center; border: 1px solid rgba(159,187,229,.2); border-radius: 10px; color: #dce9fa; background: rgba(20,31,45,.9); }
