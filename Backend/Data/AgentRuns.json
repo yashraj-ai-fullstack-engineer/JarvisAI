@@ -36,5 +36,101 @@
       "get_weather_and_air_quality"
     ],
     "error": ""
+  },
+  {
+    "id": "f160517e-e9fc-4a68-a4b6-edc79e823190",
+    "started_at": "2026-08-21T14:04:01.065396+00:00",
+    "completed_at": "2026-08-21T14:04:34.460475+00:00",
+    "status": "completed",
+    "workflow": "direct",
+    "domains": [],
+    "session_id": "e4bd13fc-4cf2-439a-b62c-5ad3c56ff553",
+    "user_id": "7bdbba13-d432-426c-be17-7fb484c19612",
+    "request_chars": 27,
+    "selected_tools": [
+      "maps_search_places"
+    ],
+    "tool_calls": [
+      "maps_search_places"
+    ],
+    "error": ""
+  },
+  {
+    "id": "2366ca50-f1bf-4be5-9ec3-980adcb8888b",
+    "started_at": "2026-08-21T14:06:31.222703+00:00",
+    "completed_at": "2026-08-21T14:06:35.144433+00:00",
+    "status": "failed",
+    "workflow": "direct",
+    "domains": [],
+    "session_id": "e4bd13fc-4cf2-439a-b62c-5ad3c56ff553",
+    "user_id": "7bdbba13-d432-426c-be17-7fb484c19612",
+    "request_chars": 25,
+    "selected_tools": [],
+    "tool_calls": [],
+    "error": "LocalLLMUnavailable: OpenRouter primary, OpenRouter fallback, and LM Studio fallback are unavailable. Primary OpenRouter (google/gemma-4-26b-a4b-it:free): OpenRouter returned HTTP 429: Provider returned error Fallback OpenRouter (poolside/laguna-s-2.1:free): OpenRouter returned HTTP 429: Provider returned error LM Studio: LM Studio is not reachable at http://127.0.0.1:1234/api/v1. Load qwen3.5-2b in LM Studio and start its local server."
+  },
+  {
+    "id": "cc742ab4-474f-48b9-bd90-a8de3256b6be",
+    "started_at": "2026-08-21T14:07:14.392070+00:00",
+    "completed_at": "2026-08-21T14:07:42.912628+00:00",
+    "status": "failed",
+    "workflow": "direct",
+    "domains": [],
+    "session_id": "e4bd13fc-4cf2-439a-b62c-5ad3c56ff553",
+    "user_id": "7bdbba13-d432-426c-be17-7fb484c19612",
+    "request_chars": 25,
+    "selected_tools": [
+      "research_web"
+    ],
+    "tool_calls": [
+      "research_web"
+    ],
+    "error": "RateLimitError: Error code: 429 - {'error': {'message': 'Provider returned error', 'code': 429, 'metadata': {'raw': 'google/gemma-4-26b-a4b-it:free is temporarily rate-limited upstream. Please retry shortly, or add your own key to accumulate your rate limits: https://openrouter.ai/settings/integrations', 'provider_name': 'Google AI Studio', 'is_byok': False, 'provider_error_code': '429', 'limit_source': 'upstream_provider_shared_pool', 'remedy_hint': 'Retry shortly, add your own provider key (ht"
+  },
+  {
+    "id": "02a973e5-839a-4864-b7a9-cd9c0b46a02d",
+    "started_at": "2026-08-21T14:35:17.682266+00:00",
+    "completed_at": "2026-08-21T14:36:09.405000+00:00",
+    "status": "completed",
+    "workflow": "direct",
+    "domains": [],
+    "session_id": "e4bd13fc-4cf2-439a-b62c-5ad3c56ff553",
+    "user_id": "7bdbba13-d432-426c-be17-7fb484c19612",
+    "request_chars": 25,
+    "selected_tools": [
+      "research_web"
+    ],
+    "tool_calls": [
+      "research_web"
+    ],
+    "error": ""
+  },
+  {
+    "id": "88c10403-0179-4015-97ca-e32e15802709",
+    "started_at": "2026-08-21T20:40:16.569585+00:00",
+    "completed_at": "2026-08-21T20:40:17.406171+00:00",
+    "status": "failed",
+    "workflow": "direct",
+    "domains": [],
+    "session_id": "6cda13ae-a13e-4a5d-9bd9-c74558397e93",
+    "user_id": "7bdbba13-d432-426c-be17-7fb484c19612",
+    "request_chars": 3,
+    "selected_tools": [],
+    "tool_calls": [],
+    "error": "LocalLLMUnavailable: OpenRouter returned HTTP 429: Rate limit exceeded: free-models-per-day. Add 10 credits to unlock 1000 free model requests per day"
+  },
+  {
+    "id": "676c72c8-f498-4852-ac75-84c310a6a9fa",
+    "started_at": "2026-08-21T20:44:32.289879+00:00",
+    "completed_at": "2026-08-21T20:44:40.038177+00:00",
+    "status": "completed",
+    "workflow": "direct",
+    "domains": [],
+    "session_id": "395addcc-c031-4f6a-a029-8d846ce1c5b5",
+    "user_id": "7bdbba13-d432-426c-be17-7fb484c19612",
+    "request_chars": 3,
+    "selected_tools": [],
+    "tool_calls": [],
+    "error": ""
   }
 ]

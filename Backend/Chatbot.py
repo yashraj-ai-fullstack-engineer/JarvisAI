@@ -100,7 +100,7 @@ def SaveExchange(
     chat_session_id = current_chat_session_id()
     if chat_session_id:
         try:
-            return mongo_save_exchange(
+            saved = mongo_save_exchange(
                 chat_session_id,
                 query,
                 answer,
@@ -109,6 +109,16 @@ def SaveExchange(
                 system_notice=system_notice,
                 research_run_id=research_run_id,
             )
+            # Keep the derived session context aligned for every write path,
+            # including PDF answers and confirmation callbacks. The agent's
+            # workflow-specific refresh may refine this immediately afterward.
+            try:
+                from Backend.SessionContext import refresh as refresh_session_context
+
+                refresh_session_context()
+            except Exception:
+                pass
+            return saved
         except StoreUnavailable:
             return None
     path = _history_path()

@@ -66,6 +66,23 @@ def _db():
         _database.message_feedback.create_index([("message_id", ASCENDING), ("user_id", ASCENDING), ("created_at", DESCENDING)])
         _database.research_runs.create_index([("user_id", ASCENDING), ("session_id", ASCENDING), ("started_at", DESCENDING)])
         _database.research_runs.create_index("id", unique=True)
+        _database.session_contexts.create_index(
+            [("session_id", ASCENDING), ("user_id", ASCENDING)],
+            unique=True,
+        )
+        _database.persona_runs.create_index("id", unique=True)
+        _database.persona_runs.create_index(
+            [("user_id", ASCENDING), ("created_at", DESCENDING)]
+        )
+        _database.persona_runs.create_index("active_key", unique=True, sparse=True)
+        _database.persona_runs.create_index(
+            [("status", ASCENDING), ("available_at", ASCENDING), ("lease_expires_at", ASCENDING)]
+        )
+        _database.persona_profiles.create_index("user_id", unique=True)
+        _database.persona_images.create_index("user_id", unique=True)
+        _database.persona_simulations.create_index(
+            [("user_id", ASCENDING), ("created_at", DESCENDING)]
+        )
         _database.chat_participants.create_index([("session_id", ASCENDING), ("user_id", ASCENDING)], unique=True)
         _database.chat_participants.create_index([("user_id", ASCENDING), ("status", ASCENDING)])
         _database.chat_invites.create_index("token_hash", unique=True)
@@ -526,6 +543,66 @@ def load_messages(session_id: str, limit: int = 200, user_id: str = "") -> list[
     return [_message_public(item, user_id) for item in records]
 
 
+def load_agent_messages(session_id: str, limit: int = 200, user_id: str = "") -> list[dict[str, Any]]:
+    """Load visible messages with metadata needed for session continuity.
+
+    This is deliberately separate from ``load_messages``. The chat API should
+    not need to expose visibility metadata, while the agent must distinguish
+    shared messages from a private connected-app response before building
+    session context.
+    """
+    db = _db()
+    query = _visible_message_query(session_id, user_id)
+    records = db.chat_messages.find(query).sort("created_at", ASCENDING).limit(limit)
+    result: list[dict[str, Any]] = []
+    for item in records:
+        message = _message_public(item, user_id)
+        message["visibility"] = str(item.get("visibility") or "shared")
+        message["visible_to_user_id"] = str(item.get("visible_to_user_id") or "")
+        result.append(message)
+    return result
+
+
+def load_session_context(session_id: str, user_id: str) -> dict[str, Any] | None:
+    """Return the derived context cache for one viewer of one chat session."""
+    if not session_id or not user_id:
+        return None
+    item = _db().session_contexts.find_one({"session_id": session_id, "user_id": user_id})
+    if not item:
+        return None
+    item.pop("_id", None)
+    return item
+
+
+def save_session_context(
+    session_id: str,
+    user_id: str,
+    context: dict[str, Any],
+    expected_version: int | None = None,
+) -> dict[str, Any]:
+    """Upsert derived context without allowing an older update to win."""
+    if not session_id or not user_id:
+        return {"session_id": session_id, "user_id": user_id, **context}
+    db = _db()
+    now = _now()
+    version = int(context.get("version") or 0)
+    payload = {
+        "session_id": session_id,
+        "user_id": user_id,
+        **context,
+        "version": version,
+        "updated_at": now,
+    }
+    query: dict[str, Any] = {"session_id": session_id, "user_id": user_id}
+    if expected_version is not None:
+        query["version"] = int(expected_version)
+    result = db.session_contexts.replace_one(query, payload, upsert=expected_version is None)
+    if expected_version is not None and not result.matched_count:
+        raise ValueError("Session context changed while it was being updated.")
+    payload["updated_at"] = now.isoformat()
+    return payload
+
+
 def reply_snapshot(session_id: str, user_id: str, reply_to_id: str = "", max_chars: int = 280) -> dict[str, str] | None:
     if not reply_to_id:
         return None
@@ -580,7 +657,15 @@ def save_exchange(
     latest_user = db.chat_messages.find_one({"session_id": session_id, "role": "user"}, sort=[("created_at", DESCENDING)])
     messages = []
     if not latest_user or str(latest_user.get("content") or "") != query:
-        messages.append({"id": str(uuid.uuid4()), "session_id": session_id, "role": "user", "content": query, "visibility": "shared", "created_at": now})
+        messages.append({
+            "id": str(uuid.uuid4()),
+            "session_id": session_id,
+            "role": "user",
+            "content": query,
+            "sender_user_id": current_chat_user_id(),
+            "visibility": "shared",
+            "created_at": now,
+        })
     messages.append({
         "id": str(uuid.uuid4()),
         "session_id": session_id,
