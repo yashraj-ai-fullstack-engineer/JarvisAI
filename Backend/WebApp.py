@@ -65,14 +65,26 @@ from Backend.EmailManager import (
     confirm_pending_email,
     get_latest_pending_email,
 )
-from Backend.LLMProvider import LMSTUDIO_MODEL, get_config, provider_status
+from Backend.LLMProvider import OPENROUTER_MODEL, get_config, provider_status
 from Backend.LLMProvider import EmbeddingUnavailable, LocalLLMUnavailable
+from Backend.ErrorHandling import format_error_event, log_and_get_friendly
 from Backend.PDFQA import (
     MAX_PDF_BYTES,
     PDFQAError,
     answer_saved_document_question,
     answer_transient_pdf_question,
     remember_pdf_document,
+)
+from Backend.Persona import (
+    delete_persona,
+    persona_image,
+    persona_snapshot,
+    queue_persona_run,
+    persona_agent_instructions,
+    simulate_twin,
+    suppress_source,
+    update_controls,
+    update_observation,
 )
 from Backend.ResearchPdfService import (
     ResearchPdfError,
@@ -213,7 +225,7 @@ app.add_middleware(
     # without broadening CORS access to non-local origins.
     allow_origin_regex=get_config("CORS_ALLOWED_ORIGIN_REGEX", r"https?://(localhost|127\.0\.0\.1):\d+"),
     allow_credentials=True,
-    allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Content-Type", "Authorization"],
 )
 
@@ -286,6 +298,27 @@ class SavedDocumentQueryRequest(BaseModel):
     session_id: str = Field(min_length=36, max_length=36)
 
 
+class PersonaControlsRequest(BaseModel):
+    mirror_complement: int | None = Field(default=None, ge=0, le=100)
+    concise_detailed: int | None = Field(default=None, ge=0, le=100)
+    direct_diplomatic: int | None = Field(default=None, ge=0, le=100)
+    analytical_creative: int | None = Field(default=None, ge=0, le=100)
+    cautious_bold: int | None = Field(default=None, ge=0, le=100)
+    supportive_challenging: int | None = Field(default=None, ge=0, le=100)
+    structured_exploratory: int | None = Field(default=None, ge=0, le=100)
+    apply_to_agent: bool | None = None
+
+
+class PersonaObservationRequest(BaseModel):
+    title: str | None = Field(default=None, min_length=1, max_length=80)
+    description: str | None = Field(default=None, min_length=1, max_length=320)
+    enabled: bool | None = None
+
+
+class PersonaSimulationRequest(BaseModel):
+    scenario: str = Field(min_length=3, max_length=3000)
+
+
 def _google_session_id(request: Request) -> str:
     return str(
         getattr(request.state, "nexa_session_id", "")
@@ -313,6 +346,18 @@ def _authenticated_user(request: Request) -> dict:
     if not user:
         raise HTTPException(status_code=401, detail="Sign in to continue.")
     return user
+
+
+def _is_persona_command(message: str) -> bool:
+    return bool(re.fullmatch(r"(?:@nexa\s+)?/me", str(message or "").strip(), re.IGNORECASE))
+
+
+def _private_json(content: dict, status_code: int = 200) -> JSONResponse:
+    return JSONResponse(
+        content,
+        status_code=status_code,
+        headers={"Cache-Control": "private, no-store"},
+    )
 
 
 def _set_auth_cookie(response: Response, token: str) -> None:
@@ -406,6 +451,20 @@ def _agent_query_with_reply_context(query: str, reply_to: dict | None, user: dic
     )
 
 
+def _agent_query_with_persona_controls(query: str, user_id: str) -> str:
+    try:
+        instructions = persona_agent_instructions(user_id)
+    except StoreUnavailable:
+        instructions = ""
+    if not instructions:
+        return query
+    return (
+        f"{instructions}\n\n"
+        "The following is the user's current request. Follow it normally; persona controls affect delivery style only.\n"
+        f"<current_request>{query}</current_request>"
+    )
+
+
 @app.get("/api/health")
 def health() -> dict:
     mcp = mcp_status_snapshot()
@@ -415,7 +474,7 @@ def health() -> dict:
         "status": "online" if healthy else "degraded",
         "assistant": Assistantname,
         "username": Username,
-        "model": LMSTUDIO_MODEL,
+        "model": str(llm.get("model") or OPENROUTER_MODEL),
         "engine": "langgraph",
         "mcp_active_servers": mcp["active_count"],
         "mcp_ready_servers": mcp["ready_count"],
@@ -426,6 +485,111 @@ def health() -> dict:
 @app.get("/api/auth/me")
 def current_user_api(request: Request) -> dict:
     return {"user": _authenticated_user(request)}
+
+
+@app.post("/api/persona/runs", status_code=202)
+def create_persona_run_api(request: Request) -> JSONResponse:
+    user = _authenticated_user(request)
+    try:
+        run = queue_persona_run(user["id"])
+    except StoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    return _private_json({"run": run, "persona_url": "/persona"}, status_code=202)
+
+
+@app.get("/api/persona")
+def get_persona_api(request: Request) -> JSONResponse:
+    user = _authenticated_user(request)
+    try:
+        return _private_json(persona_snapshot(user["id"]))
+    except StoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.get("/api/persona/image")
+def get_persona_image_api(request: Request) -> Response:
+    user = _authenticated_user(request)
+    try:
+        image = persona_image(user["id"])
+    except StoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+    if not image:
+        raise HTTPException(status_code=404, detail="Persona image not found.")
+    content, content_type = image
+    return Response(content=content, media_type=content_type, headers={"Cache-Control": "private, no-store"})
+
+
+@app.patch("/api/persona/controls")
+def update_persona_controls_api(payload: PersonaControlsRequest, request: Request) -> JSONResponse:
+    user = _authenticated_user(request)
+    values = payload.model_dump(exclude_none=True) if hasattr(payload, "model_dump") else payload.dict(exclude_none=True)
+    try:
+        controls = update_controls(user["id"], values)
+        return _private_json({"controls": controls})
+    except ValueError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except StoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.patch("/api/persona/observations/{observation_id}")
+def update_persona_observation_api(observation_id: str, payload: PersonaObservationRequest, request: Request) -> JSONResponse:
+    user = _authenticated_user(request)
+    values = payload.model_dump(exclude_none=True) if hasattr(payload, "model_dump") else payload.dict(exclude_none=True)
+    try:
+        return _private_json({"observation": update_observation(user["id"], observation_id, values)})
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.delete("/api/persona/observations/{observation_id}")
+def delete_persona_observation_api(observation_id: str, request: Request) -> JSONResponse:
+    user = _authenticated_user(request)
+    try:
+        return _private_json(update_observation(user["id"], observation_id, delete=True))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.delete("/api/persona/sources/{message_id}")
+def delete_persona_source_api(message_id: str, request: Request) -> JSONResponse:
+    user = _authenticated_user(request)
+    try:
+        return _private_json(suppress_source(user["id"], message_id))
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.post("/api/persona/simulations")
+async def simulate_persona_api(payload: PersonaSimulationRequest, request: Request) -> JSONResponse:
+    user = _authenticated_user(request)
+    try:
+        result = await run_in_threadpool(simulate_twin, user["id"], payload.scenario.strip())
+        return _private_json({"simulation": result})
+    except PermissionError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except LocalLLMUnavailable as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    except StoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
+
+
+@app.delete("/api/persona")
+def delete_persona_api(request: Request) -> JSONResponse:
+    user = _authenticated_user(request)
+    try:
+        delete_persona(user["id"])
+        return _private_json({"deleted": True})
+    except StoreUnavailable as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
 
 @app.post("/api/auth/register")
@@ -632,6 +796,9 @@ async def create_session_message_api(session_id: str, payload: SessionMessageReq
     if not message:
         raise HTTPException(status_code=422, detail="Message cannot be empty.")
     try:
+        if _is_persona_command(message):
+            run = queue_persona_run(user["id"])
+            return {"persona_run": run, "persona_url": "/persona"}
         reply_to = reply_snapshot(session_id, user["id"], payload.reply_to_id)
         saved = save_message(session_id, "user", message, user["id"], user["name"], reply_to=reply_to)
         await live_sessions.broadcast(session_id, {"type": "message", "message": saved})
@@ -759,7 +926,15 @@ async def chat_live_socket(session_id: str, websocket: WebSocket) -> None:
                 await websocket.send_text(json.dumps({"type": "error", "message": "Message must be between 1 and 10,000 characters."}))
                 continue
             if re.match(r"^@nexa\b", content, re.IGNORECASE):
+                if _is_persona_command(content):
+                    run = queue_persona_run(user["id"])
+                    await websocket.send_text(json.dumps({"type": "persona_queued", "run": run, "persona_url": "/persona"}))
+                    continue
                 await websocket.send_text(json.dumps({"type": "error", "message": "Send @Nexa requests through the agent channel."}))
+                continue
+            if _is_persona_command(content):
+                run = queue_persona_run(user["id"])
+                await websocket.send_text(json.dumps({"type": "persona_queued", "run": run, "persona_url": "/persona"}))
                 continue
             reply_to = reply_snapshot(session_id, user["id"], str(payload.get("reply_to_id") or ""))
             saved = save_message(session_id, "user", content, user["id"], user["name"], reply_to=reply_to)
@@ -999,7 +1174,7 @@ async def ask_pdf_api(
 
     history_query = f"{'/remember ' if is_remembered else ''}{document_question}\n\nDocument: {filename}"
     with _chat_lock(request):
-        with chat_session_context(session_id):
+        with chat_session_context(session_id, user["id"], user.get("email", "")):
             SaveExchange(history_query, str(result.get("answer") or ""))
     await live_sessions.broadcast(session_id, {"type": "refresh"})
     return PDFAnswerResponse(**result)
@@ -1027,18 +1202,23 @@ async def query_saved_documents_api(payload: SavedDocumentQueryRequest, request:
     except LocalLLMUnavailable as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
     with _chat_lock(request):
-        with chat_session_context(payload.session_id):
+        with chat_session_context(payload.session_id, user["id"], user.get("email", "")):
             SaveExchange(f"/doc {question}", str(result.get("answer") or ""))
     await live_sessions.broadcast(payload.session_id, {"type": "refresh"})
     return PDFAnswerResponse(**result)
 
 
-@app.post("/api/chat", response_model=ChatResponse)
-async def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
+@app.post("/api/chat", response_model=None)
+async def chat(request: ChatRequest, http_request: Request) -> ChatResponse | JSONResponse:
     message = request.message.strip()
     if not message:
         raise HTTPException(status_code=422, detail="Message cannot be empty.")
     user = _require_chat_session(http_request, request.session_id)
+    if _is_persona_command(message):
+        try:
+            return _private_json({"run": queue_persona_run(user["id"]), "persona_url": "/persona"}, status_code=202)
+        except StoreUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
 
     research_question = parse_research_command(message)
     if research_question == "":
@@ -1052,33 +1232,42 @@ async def chat(request: ChatRequest, http_request: Request) -> ChatResponse:
         reply_to = reply_snapshot(request.session_id, user["id"], request.reply_to_id, max_chars=0)
     except StoreUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    agent_message = _agent_query_with_reply_context(message, reply_to, user)
-    with _chat_lock(http_request):
-        with chat_session_context(request.session_id, user["id"], user.get("email", "")), google_session_context(_google_session_id(http_request)), google_user_context(user["id"]):
-            stream = (
-                DeepResearchStream(research_question, history_query=message)
-                if research_question is not None
-                else AssistantStream(agent_message, request.location, history_query=message)
-            )
-            async for event in stream:
-                if event.get("type") == "status":
-                    stage = event.get("stage", "Step")
-                    status_message = event.get("message", "")
-                    detail = event.get("detail", "")
-                    plan_steps.append(f"{stage}: {status_message}" + (f" - {detail}" if detail else ""))
-                elif event.get("type") == "confirm_email":
-                    pending_email = event.get("email")
-                elif event.get("type") == "confirm_mcp_action":
-                    pending_action = event.get("action")
-                elif event.get("type") == "done":
-                    answer = event.get("answer", "")
-                    if event.get("skip_chat") and pending_email:
-                        recipients = ", ".join(pending_email.get("to", []))
-                        answer = f"Email is ready for confirmation in the UI for {recipients}." if recipients else "Email draft is ready for confirmation in the UI."
-                    elif event.get("skip_chat") and pending_action:
-                        answer = f"{pending_action.get('display_name') or 'Connected app action'} is ready for confirmation in the UI."
-                elif event.get("type") == "error":
-                    answer = event.get("message", "The agent could not complete the request.")
+    agent_message = _agent_query_with_persona_controls(
+        _agent_query_with_reply_context(message, reply_to, user),
+        user["id"],
+    )
+    try:
+        with _chat_lock(http_request):
+            with chat_session_context(request.session_id, user["id"], user.get("email", "")), google_session_context(_google_session_id(http_request)), google_user_context(user["id"]):
+                stream = (
+                    DeepResearchStream(research_question, history_query=message)
+                    if research_question is not None
+                    else AssistantStream(agent_message, request.location, history_query=message)
+                )
+                async for event in stream:
+                    if event.get("type") == "status":
+                        stage = event.get("stage", "Step")
+                        status_message = event.get("message", "")
+                        detail = event.get("detail", "")
+                        plan_steps.append(f"{stage}: {status_message}" + (f" - {detail}" if detail else ""))
+                    elif event.get("type") == "confirm_email":
+                        pending_email = event.get("email")
+                    elif event.get("type") == "confirm_mcp_action":
+                        pending_action = event.get("action")
+                    elif event.get("type") == "done":
+                        answer = event.get("answer", "")
+                        if event.get("skip_chat") and pending_email:
+                            recipients = ", ".join(pending_email.get("to", []))
+                            answer = f"Email is ready for confirmation in the UI for {recipients}." if recipients else "Email draft is ready for confirmation in the UI."
+                        elif event.get("skip_chat") and pending_action:
+                            answer = f"{pending_action.get('display_name') or 'Connected app action'} is ready for confirmation in the UI."
+                    elif event.get("type") == "error":
+                        answer = event.get("message", "Something went wrong. Let's try again in a moment.")
+    except Exception as exc:
+        from Backend.ErrorHandling import format_error_event
+        error_event = format_error_event(exc, context="chat")
+        answer = error_event["message"]
+        plan_steps.append(f"Error: {error_event['error_code']}")
     plan = "\n".join(plan_steps)
     return ChatResponse(answer=answer, plan=plan)
 
@@ -1089,6 +1278,11 @@ async def chat_stream(request: ChatRequest, http_request: Request):
     if not message:
         raise HTTPException(status_code=422, detail="Message cannot be empty.")
     user = _require_chat_session(http_request, request.session_id)
+    if _is_persona_command(message):
+        try:
+            return _private_json({"run": queue_persona_run(user["id"]), "persona_url": "/persona"}, status_code=202)
+        except StoreUnavailable as exc:
+            raise HTTPException(status_code=503, detail=str(exc)) from exc
     trigger = re.match(r"^@nexa\b[\s,:-]*(.*)$", message, re.IGNORECASE | re.DOTALL)
     try:
         shared_session = active_participant_count(request.session_id) > 1
@@ -1109,23 +1303,31 @@ async def chat_stream(request: ChatRequest, http_request: Request):
         save_message(request.session_id, "user", message, user["id"], user["name"], reply_to=reply_to)
     except StoreUnavailable as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    agent_message = _agent_query_with_reply_context(message, agent_reply_to, user)
+    agent_message = _agent_query_with_persona_controls(
+        _agent_query_with_reply_context(message, agent_reply_to, user),
+        user["id"],
+    )
 
     async def event_stream():
-        with _chat_lock(http_request):
-            session_id = _google_session_id(http_request)
-            # Keep the browser session ContextVar active for the entire async
-            # execution so MCP tools receive the connected account token.
-            with chat_session_context(request.session_id, user["id"], user.get("email", "")), google_session_context(session_id), google_user_context(user["id"]):
-                stream = (
-                    DeepResearchStream(research_question, history_query=message)
-                    if research_question is not None
-                    else AssistantStream(agent_message, request.location, history_query=message)
-                )
-                async for event in stream:
-                    if event.get("type") == "done" and not event.get("skip_chat") and event.get("answer"):
-                        await live_sessions.broadcast(request.session_id, {"type": "refresh"})
-                    yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        try:
+            with _chat_lock(http_request):
+                session_id = _google_session_id(http_request)
+                # Keep the browser session ContextVar active for the entire async
+                # execution so MCP tools receive the connected account token.
+                with chat_session_context(request.session_id, user["id"], user.get("email", "")), google_session_context(session_id), google_user_context(user["id"]):
+                    stream = (
+                        DeepResearchStream(research_question, history_query=message)
+                        if research_question is not None
+                        else AssistantStream(agent_message, request.location, history_query=message)
+                    )
+                    async for event in stream:
+                        if event.get("type") == "done" and not event.get("skip_chat") and event.get("answer"):
+                            await live_sessions.broadcast(request.session_id, {"type": "refresh"})
+                        yield f"data: {json.dumps(event, ensure_ascii=False)}\n\n"
+        except Exception as exc:
+            from Backend.ErrorHandling import format_error_event
+            error_event = format_error_event(exc, context="chat_stream")
+            yield f"data: {json.dumps(error_event, ensure_ascii=False)}\n\n"
 
     return StreamingResponse(
         event_stream(),

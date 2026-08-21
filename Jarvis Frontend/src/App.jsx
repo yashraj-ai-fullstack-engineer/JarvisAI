@@ -3,6 +3,7 @@ import { Check, CircleHelp, Command, Copy, Crown, FileText, Link2, LoaderCircle,
 import Particles, { ParticlesProvider } from '@tsparticles/react'
 import { loadSlim } from '@tsparticles/slim'
 import MarkdownResponse from './components/MarkdownResponse.jsx'
+import PersonaDashboard from './components/PersonaDashboard.jsx'
 import './App.css'
 
 const starterMessages = [
@@ -40,6 +41,7 @@ const AGENT_PREFIX_PATTERN = /^@nexa(?:\b|$)[\s,:-]*/i
 const AGENT_DRAFT_PATTERN = /^@(?:n(?:e(?:x(?:a)?)?)?)(?:\b|$)[\s,:-]*/i
 const AGENT_PARTIAL_PATTERN = /^@(?:n(?:e(?:x(?:a)?)?)?)?$/i
 const RESEARCH_COMMAND_PATTERN = /^\/research(?:\s|$)/i
+const PERSONA_COMMAND_PATTERN = /^(?:@nexa\s+)?\/me$/i
 const GOOGLE_SERVICE_DEFAULTS = [
   { service: 'gmail', label: 'Gmail', configured: true, connected: false, email: '' },
   { service: 'google_calendar', label: 'Google Calendar', configured: true, connected: false, email: '' },
@@ -97,6 +99,10 @@ function apiFetch(resource, options = {}) {
 
 function inviteTokenFromPath(pathname = window.location.pathname) {
   return /^\/join\/([^/]+)$/.exec(pathname)?.[1] || ''
+}
+
+function pageFromPath(pathname = window.location.pathname) {
+  return pathname === '/persona' ? 'persona' : 'chat'
 }
 
 function readPendingInviteToken() {
@@ -857,7 +863,7 @@ function App() {
   const [apiError, setApiError] = useState('')
   const [isOnline, setIsOnline] = useState(false)
   const [thinkingStatus, setThinkingStatus] = useState('')
-  const [thinkingDetail, setThinkingDetail] = useState('')
+  const [, setThinkingDetail] = useState('')
   const [thinkingEvents, setThinkingEvents] = useState([])
   const [liveAnswer, setLiveAnswer] = useState('')
   const [mcpServers, setMcpServers] = useState([])
@@ -874,6 +880,8 @@ function App() {
   const [pdfFile, setPdfFile] = useState(null)
   const [user, setUser] = useState(null)
   const [authView, setAuthView] = useState(false)
+  const [currentPage, setCurrentPage] = useState(() => pageFromPath())
+  const [personaRunBusy, setPersonaRunBusy] = useState(false)
   const [chatSessions, setChatSessions] = useState([])
   const [activeSessionId, setActiveSessionId] = useState('')
   const [deletingSessionId, setDeletingSessionId] = useState('')
@@ -913,6 +921,16 @@ function App() {
   const pdfInputRef = useRef(null)
   const locationPromptedRef = useRef('')
   const shareInviteRequestRef = useRef(0)
+
+  const navigateTo = useCallback((path, { replace = false } = {}) => {
+    if (replace) window.history.replaceState({}, '', path)
+    else if (window.location.pathname !== path) window.history.pushState({}, '', path)
+    setCurrentPage(pageFromPath(path))
+    setLeftPanelOpen(false)
+    setMembersOpen(false)
+    setComposerHelpOpen(false)
+  }, [])
+  const showAuth = useCallback(() => setAuthView(true), [])
 
   const applyPendingEmail = useCallback((email) => {
     setPendingEmail(email || null)
@@ -966,6 +984,24 @@ function App() {
     setMessages((current) => areMessagesEquivalent(current, nextMessages) ? current : nextMessages)
     if (options.markRead !== false) markSessionRead(sessionId).catch(() => {})
   }, [markSessionRead])
+
+  const openChatHome = useCallback(async () => {
+    navigateTo('/')
+    if (!user || activeSessionId) return
+    try {
+      const sessions = await loadChatSessions()
+      if (sessions.length) await openChatSession(sessions[0].id)
+      else await createChatSession()
+    } catch (error) {
+      setApiError(error.message || 'Could not open your chats.')
+    }
+  }, [activeSessionId, createChatSession, loadChatSessions, navigateTo, openChatSession, user])
+
+  useEffect(() => {
+    const handlePopState = () => setCurrentPage(pageFromPath())
+    window.addEventListener('popstate', handlePopState)
+    return () => window.removeEventListener('popstate', handlePopState)
+  }, [])
 
   const loadParticipants = useCallback(async (sessionId = activeSessionId) => {
     if (!sessionId) return
@@ -1164,6 +1200,7 @@ function App() {
   }, [theme])
 
   useEffect(() => {
+    if (currentPage !== 'chat') return undefined
     const feed = feedRef.current
     if (!feed) return undefined
 
@@ -1201,7 +1238,7 @@ function App() {
       window.removeEventListener('resize', scheduleVisibleDayUpdate)
       if (updateFrame) window.cancelAnimationFrame(updateFrame)
     }
-  }, [activeSessionId, messages.length])
+  }, [activeSessionId, currentPage, messages.length])
 
   const startReply = useCallback((message) => {
     const preview = replyPreviewFromMessage(message)
@@ -1346,6 +1383,7 @@ function App() {
     writePendingInviteToken('')
     setPendingRejoinInvite(null)
     window.history.replaceState({}, '', '/')
+    setCurrentPage('chat')
     setJoinedInviteSessionId(data.session.invite_history_mode === 'none' && !data.session.rejoined ? data.session.id : '')
     setChatSessions((current) => {
       if (!data.session) return current
@@ -1375,6 +1413,7 @@ function App() {
     setAuthView(false)
     try {
       if (await acceptInviteFromUrl()) return
+      if (pageFromPath() === 'persona') return
       const sessions = await loadChatSessions()
       if (sessions.length) await openChatSession(sessions[0].id)
       else await createChatSession()
@@ -1599,6 +1638,31 @@ function App() {
     if (!cleanMessage || isThinking) return
     if (!user) {
       setAuthView(true)
+      return
+    }
+    if (PERSONA_COMMAND_PATTERN.test(cleanMessage)) {
+      if (personaRunBusy) return
+      setPersonaRunBusy(true)
+      setApiError('')
+      try {
+        const response = await apiFetch(`${API_BASE}/api/persona/runs`, {
+          method: 'POST',
+          credentials: 'include',
+        })
+        const data = await response.json()
+        if (!response.ok) throw new Error(data.detail || 'Could not start persona analysis.')
+        setInput('')
+        setReplyTarget(null)
+        announceTyping(false)
+        setIsOnline(true)
+        navigateTo('/persona')
+      } catch (error) {
+        setApiError(error.message === 'Failed to fetch'
+          ? 'Nexa API is offline. Start the backend and try again.'
+          : error.message)
+      } finally {
+        setPersonaRunBusy(false)
+      }
       return
     }
     if (!activeSessionId) {
@@ -1930,10 +1994,12 @@ function App() {
     requestSignedInLocation,
     replyTarget,
     announceTyping,
+    navigateTo,
+    personaRunBusy,
   ])
 
   useEffect(() => {
-    if (!user || !activeSessionId) return undefined
+    if (currentPage !== 'chat' || !user || !activeSessionId) return undefined
     const timer = window.setTimeout(() => {
       loadParticipants().catch(() => {
         setParticipants([])
@@ -1941,10 +2007,10 @@ function App() {
       })
     }, 0)
     return () => window.clearTimeout(timer)
-  }, [activeSessionId, loadParticipants, user])
+  }, [activeSessionId, currentPage, loadParticipants, user])
 
   useEffect(() => {
-    if (!user || !activeSessionId) return undefined
+    if (currentPage !== 'chat' || !user || !activeSessionId) return undefined
     if (!activeSessionIsShared) return undefined
     let disposed = false
     let reconnectTimer = 0
@@ -2023,10 +2089,10 @@ function App() {
       sessionSocketRef.current?.close()
       sessionSocketRef.current = null
     }
-  }, [activeSessionId, activeSessionIsShared, createChatSession, loadChatSessions, loadParticipants, markSessionRead, openChatSession, user])
+  }, [activeSessionId, activeSessionIsShared, createChatSession, currentPage, loadChatSessions, loadParticipants, markSessionRead, openChatSession, user])
 
   useEffect(() => {
-    if (!user || !activeSessionId) return undefined
+    if (currentPage !== 'chat' || !user || !activeSessionId) return undefined
     const isSharedSession = Boolean(chatSessions.find((session) => session.id === activeSessionId)?.shared)
     if (!isSharedSession) return undefined
     let refreshing = false
@@ -2043,10 +2109,10 @@ function App() {
     }
     const timer = window.setInterval(refreshMessages, 4000)
     return () => window.clearInterval(timer)
-  }, [activeSessionId, chatSessions, openChatSession, user])
+  }, [activeSessionId, chatSessions, currentPage, openChatSession, user])
 
   useEffect(() => {
-    if (!user) return undefined
+    if (currentPage !== 'chat' || !user) return undefined
     const refreshSessions = () => loadChatSessions().catch(() => {})
     const handleVisibility = () => {
       if (document.visibilityState === 'visible') {
@@ -2062,7 +2128,7 @@ function App() {
       window.removeEventListener('focus', refreshSessions)
       document.removeEventListener('visibilitychange', handleVisibility)
     }
-  }, [activeSessionId, loadChatSessions, markSessionRead, user])
+  }, [activeSessionId, currentPage, loadChatSessions, markSessionRead, user])
 
   useEffect(() => {
     if (!membersOpen && !composerHelpOpen) return undefined
@@ -2089,12 +2155,18 @@ function App() {
           const auth = await authResponse.json()
           setUser(auth.user)
           if (await acceptInviteFromUrl()) return
-          const sessions = await loadChatSessions()
-          if (sessions.length) await openChatSession(sessions[0].id)
-          else await createChatSession()
+          if (pageFromPath() !== 'persona') {
+            const sessions = await loadChatSessions()
+            if (sessions.length) await openChatSession(sessions[0].id)
+            else await createChatSession()
+          } else {
+            setCurrentPage('persona')
+          }
         } else if (inviteTokenFromPath()) {
           // Keep the invite URL intact; after sign-in the join effect redeems it.
           writePendingInviteToken(inviteTokenFromPath())
+          setAuthView(true)
+        } else if (pageFromPath() === 'persona') {
           setAuthView(true)
         }
         const [
@@ -2171,6 +2243,7 @@ function App() {
   }, [user, requestSignedInLocation])
 
   useEffect(() => {
+    if (currentPage !== 'chat') return undefined
     const feed = feedRef.current
     if (!feed || !shouldStickToBottomRef.current) return undefined
     if (scrollFrameRef.current) window.cancelAnimationFrame(scrollFrameRef.current)
@@ -2184,7 +2257,7 @@ function App() {
         scrollFrameRef.current = 0
       }
     }
-  }, [messages.length, isThinking, liveAnswer, thinkingStatus])
+  }, [currentPage, messages.length, isThinking, liveAnswer, thinkingStatus])
 
   const activeSession = chatSessions.find((session) => session.id === activeSessionId)
   const sharedSessionActive = activeSessionIsShared
@@ -2198,7 +2271,7 @@ function App() {
     <main className={`app-shell theme-${theme}`}>
       <AmbientParticles />
       <header className="topbar">
-        <a className="brand" href="/" aria-label="Nexa home">
+        <a className="brand" href="/" aria-label="Nexa home" onClick={(event) => { event.preventDefault(); openChatHome() }}>
           <span className="brand-emblem"><Logo /></span>
           <span className="brand-copy">
             <strong>Nexa</strong>
@@ -2208,7 +2281,7 @@ function App() {
 
         <div className="system-state">
           <Sparkles size={14} />
-          <span>{isOnline ? 'Workspace ready' : 'Reconnecting'}</span>
+          <span>{isOnline ? (currentPage === 'persona' ? 'Private persona' : 'Workspace ready') : 'Reconnecting'}</span>
         </div>
 
         <div className="topbar-actions">
@@ -2229,10 +2302,19 @@ function App() {
           >
             {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
           </button>
-          {user ? <button className={`profile-button ${user.picture ? 'has-photo' : ''}`} type="button" data-email={user.email} title={user.email} aria-label={`Signed in as ${user.email}`}>{user.picture ? <img src={user.picture} alt="" referrerPolicy="no-referrer" /> : (user.name?.trim()?.charAt(0)?.toUpperCase() || 'U')}</button> : <button className="profile-button" type="button" onClick={() => setAuthView(true)} aria-label="Sign in">?</button>}
+          {user ? <button className={`profile-button ${user.picture ? 'has-photo' : ''}`} type="button" data-email={user.email} title="Open your private persona" aria-label="Open your private persona" onClick={() => navigateTo('/persona')}>{user.picture ? <img src={user.picture} alt="" referrerPolicy="no-referrer" /> : (user.name?.trim()?.charAt(0)?.toUpperCase() || 'U')}</button> : <button className="profile-button" type="button" onClick={showAuth} aria-label="Sign in">?</button>}
         </div>
       </header>
 
+      {currentPage === 'persona' ? (
+        <PersonaDashboard
+          apiBase={API_BASE}
+          fetchApi={apiFetch}
+          user={user}
+          onBack={openChatHome}
+          onRequireAuth={showAuth}
+        />
+      ) : <>
       <div className={`mobile-drawer-actions ${leftPanelOpen ? 'drawer-open' : ''}`} aria-label="Mobile panels">
         <button
           type="button"
@@ -2254,6 +2336,7 @@ function App() {
           <button className="mobile-drawer-close" type="button" onClick={() => setLeftPanelOpen(false)} aria-label="Close chat sessions"><X size={18} /></button>
           <div className="chat-sidebar-content">
             <button className="new-chat-button" type="button" disabled={activeSessionIsEmpty} onClick={() => openOrCreateDraftSession().catch((error) => setApiError(error.message))}><Plus size={17} /> New chat <span>⌘ K</span></button>
+            <button className="persona-sidebar-button" type="button" onClick={() => user ? navigateTo('/persona') : showAuth()}><Sparkles size={17} /> Persona <span>Private</span></button>
             <div className="chat-list-heading"><p className="section-label">CONVERSATIONS</p><button type="button" aria-label="Search chats"><Search size={15} /></button></div>
             <div className="chat-session-list">
               {chatSessions.map((session) => (
@@ -2513,13 +2596,6 @@ function App() {
                   <div className="thinking-stage" aria-live="polite">
                     <span className="thinking-pulse"><i /><i /><i /></span>
                     <span>{thinkingStatus || 'Thinking'}</span>
-                  </div>
-                  {thinkingDetail && <p className="thinking-detail">{thinkingDetail}</p>}
-                  <div className="agent-steps-in-chat" aria-label="Current agent action">
-                    <div className="agent-step">
-                      <span className="agent-step-orb" aria-hidden="true" />
-                      <strong>{thinkingStatus || 'Working on your request'}</strong>
-                    </div>
                   </div>
                   {liveAnswer && <MarkdownResponse streaming>{liveAnswer}</MarkdownResponse>}
                 </div>
@@ -3043,6 +3119,7 @@ function App() {
           </p>
         </aside>
       </section>
+      </>}
       {authView && !user && (
         <AuthScreen
           dialog

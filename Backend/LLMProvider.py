@@ -28,7 +28,7 @@ def get_config(name: str, default: str = "") -> str:
     return default
 
 
-LLM_PROVIDER = get_config("LLM_PROVIDER", "lmstudio").lower()
+LLM_PROVIDER = get_config("LLM_PROVIDER", "openrouter").lower()
 LMSTUDIO_BASE_URL = get_config("LMSTUDIO_BASE_URL", "http://127.0.0.1:1234/v1").rstrip("/")
 LMSTUDIO_REST_BASE_URL = get_config(
     "LMSTUDIO_REST_BASE_URL", "http://127.0.0.1:1234/api/v1"
@@ -43,7 +43,7 @@ OPENROUTER_MODEL = get_config(
     "OPENROUTER_MODEL", "google/gemma-4-26b-a4b-it:free"
 )
 OPENROUTER_FALLBACK_MODEL = get_config(
-    "OPENROUTER_FALLBACK_MODEL", "poolside/laguna-s-2.1:free"
+    "OPENROUTER_FALLBACK_MODEL", "nvidia/nemotron-3-ultra-550b-a55b:free"
 )
 OPENROUTER_API_KEY = get_config("OPENROUTER_API_KEY", "")
 OPENROUTER_TIMEOUT_SECONDS = int(
@@ -69,38 +69,17 @@ class EmbeddingUnavailable(RuntimeError):
 
 def provider_status(timeout_seconds: float = 2.0) -> dict[str, object]:
     """Return a bounded live check of the configured primary and fallback LLMs."""
-    if LLM_PROVIDER in {"openrouter", "openrouter_lmstudio"}:
+    if LLM_PROVIDER == "openrouter":
         openrouter = openrouter_status(timeout_seconds, OPENROUTER_MODEL)
         openrouter_fallback = openrouter_status(timeout_seconds, OPENROUTER_FALLBACK_MODEL)
-        if LLM_PROVIDER == "openrouter":
-            return {
-                "available": bool(openrouter.get("available") or openrouter_fallback.get("available")),
-                "provider": "openrouter",
-                "primary": openrouter,
-                "fallback": openrouter_fallback,
-                "model": OPENROUTER_MODEL,
-                "fallback_model": OPENROUTER_FALLBACK_MODEL,
-                "model_loaded": bool(openrouter.get("model_loaded") or openrouter_fallback.get("model_loaded")),
-                "error": "" if openrouter.get("available") else str(openrouter.get("error") or ""),
-            }
-        lmstudio = lmstudio_status(timeout_seconds)
         return {
-            "available": bool(
-                openrouter.get("available")
-                or openrouter_fallback.get("available")
-                or lmstudio.get("available")
-            ),
-            "provider": "openrouter_lmstudio",
+            "available": bool(openrouter.get("available") or openrouter_fallback.get("available")),
+            "provider": "openrouter",
             "primary": openrouter,
-            "openrouter_fallback": openrouter_fallback,
-            "fallback": lmstudio,
+            "fallback": openrouter_fallback,
             "model": OPENROUTER_MODEL,
             "fallback_model": OPENROUTER_FALLBACK_MODEL,
-            "model_loaded": bool(
-                openrouter.get("model_loaded")
-                or openrouter_fallback.get("model_loaded")
-                or lmstudio.get("model_loaded")
-            ),
+            "model_loaded": bool(openrouter.get("model_loaded") or openrouter_fallback.get("model_loaded")),
             "error": "" if openrouter.get("available") else str(openrouter.get("error") or ""),
         }
     return lmstudio_status(timeout_seconds)
@@ -364,30 +343,10 @@ def generate_text(
         except LocalLLMUnavailable as primary_exc:
             logger.warning("OpenRouter primary unavailable, trying OpenRouter fallback: %s", primary_exc)
             return openrouter_generate(prompt, system, OPENROUTER_FALLBACK_MODEL, temperature, reasoning, max_output_tokens)
-    if LLM_PROVIDER == "openrouter_lmstudio":
-        try:
-            return openrouter_generate(prompt, system, _openrouter_model(model), temperature, reasoning, max_output_tokens)
-        except LocalLLMUnavailable as primary_exc:
-            logger.warning("OpenRouter primary unavailable, trying OpenRouter fallback: %s", primary_exc)
-            try:
-                return openrouter_generate(prompt, system, OPENROUTER_FALLBACK_MODEL, temperature, reasoning, max_output_tokens)
-            except LocalLLMUnavailable as openrouter_exc:
-                logger.warning("OpenRouter fallback unavailable, falling back to LM Studio: %s", openrouter_exc)
-                openrouter_error = (
-                    f"Primary OpenRouter ({OPENROUTER_MODEL}): {primary_exc} "
-                    f"Fallback OpenRouter ({OPENROUTER_FALLBACK_MODEL}): {openrouter_exc}"
-                )
-            try:
-                return lmstudio_generate(prompt, system, LMSTUDIO_MODEL, temperature, reasoning, max_output_tokens)
-            except LocalLLMUnavailable as lmstudio_exc:
-                raise LocalLLMUnavailable(
-                    "OpenRouter primary, OpenRouter fallback, and LM Studio fallback are unavailable. "
-                    f"{openrouter_error} LM Studio: {lmstudio_exc}"
-                ) from lmstudio_exc
     if LLM_PROVIDER == "lmstudio":
         return lmstudio_generate(prompt, system, model or LMSTUDIO_MODEL, temperature, reasoning, max_output_tokens)
     raise LocalLLMUnavailable(
-        f"Unsupported LLM_PROVIDER '{LLM_PROVIDER}'. Use 'openrouter_lmstudio', 'openrouter', or 'lmstudio'."
+        f"Unsupported LLM_PROVIDER '{LLM_PROVIDER}'. Use 'openrouter' or 'lmstudio'."
     )
 
 
@@ -399,7 +358,7 @@ def stream_text(
     reasoning: str | None = None,
 ):
     """Yield provider stream events as decoded dictionaries."""
-    if LLM_PROVIDER in {"openrouter", "openrouter_lmstudio"}:
+    if LLM_PROVIDER == "openrouter":
         try:
             yield from openrouter_stream_text(prompt, system, _openrouter_model(model), temperature, reasoning)
             return
@@ -409,21 +368,13 @@ def stream_text(
                 yield from openrouter_stream_text(prompt, system, OPENROUTER_FALLBACK_MODEL, temperature, reasoning)
                 return
             except LocalLLMUnavailable as openrouter_exc:
-                if LLM_PROVIDER == "openrouter":
-                    raise LocalLLMUnavailable(
-                        f"OpenRouter primary and fallback streams are unavailable. "
-                        f"Primary: {primary_exc} Fallback: {openrouter_exc}"
-                    ) from openrouter_exc
-            if LLM_PROVIDER == "openrouter":
-                raise
-            logger.warning("OpenRouter fallback stream unavailable, falling back to LM Studio: %s", openrouter_exc)
-            openrouter_error = (
-                f"Primary OpenRouter ({OPENROUTER_MODEL}): {primary_exc} "
-                f"Fallback OpenRouter ({OPENROUTER_FALLBACK_MODEL}): {openrouter_exc}"
-            )
-    if LLM_PROVIDER != "lmstudio" and LLM_PROVIDER != "openrouter_lmstudio":
+                raise LocalLLMUnavailable(
+                    f"OpenRouter primary and fallback streams are unavailable. "
+                    f"Primary: {primary_exc} Fallback: {openrouter_exc}"
+                ) from openrouter_exc
+    if LLM_PROVIDER != "lmstudio":
         raise LocalLLMUnavailable(
-            f"Unsupported LLM_PROVIDER '{LLM_PROVIDER}'. Use 'openrouter_lmstudio', 'openrouter', or 'lmstudio'."
+            f"Unsupported LLM_PROVIDER '{LLM_PROVIDER}'. Use 'openrouter' or 'lmstudio'."
         )
     _validate_local_server_url()
     selected_model = model or LMSTUDIO_MODEL
@@ -461,11 +412,6 @@ def stream_text(
             f"{LMSTUDIO_REST_BASE_URL}. Load {selected_model} in LM Studio and start "
             "its local server."
         )
-        if LLM_PROVIDER == "openrouter_lmstudio" and "openrouter_exc" in locals():
-            message = (
-                "OpenRouter primary, OpenRouter fallback, and LM Studio fallback are unavailable. "
-                f"{openrouter_error} LM Studio: {message}"
-            )
         raise LocalLLMUnavailable(message) from lmstudio_exc
 
 
